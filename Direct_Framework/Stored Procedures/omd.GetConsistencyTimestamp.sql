@@ -24,6 +24,7 @@
  *   Structured JSON-format log for diagnostics.
  *
  * @returns {INT} Return code: 0 = success, -1 = failure, -2 = unhandled error.
+ * @throws Re-raises any error after logging it to [omd].[EVENT_LOG]; @SuccessIndicator is 'N' and @ConsistencyDateTime is NULL.
  *
  * @resultset none
  *
@@ -618,5 +619,7 @@ END
     @EventDetail       = @EventDetail,
     @EventReturnCode   = @EventReturnCode;
 
+  -- Re-raise so callers see the failure, rather than only a NULL @ConsistencyDateTime.
+  THROW
   END CATCH
 END
