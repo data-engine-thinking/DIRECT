@@ -10,6 +10,10 @@
  *   Comma-separated list of target table names.
  * @param {DATETIME2(7)}  @MeasurementDateTime   [in]  (optional)
  *   Timestamp at which to evaluate; defaults to current UTC time when NULL.
+ * @param {NVARCHAR(128)} @SourceTimestampColumn [in]  (optional, default='LOAD_DATETIME')
+ *   Name of the load/inscription timestamp column in the source data objects, used to check for outstanding rows.
+ * @param {NVARCHAR(128)} @SourceModuleInstanceColumn [in] (optional, default='MODULE_INSTANCE_ID')
+ *   Name of the column in the source data objects that holds the module instance id that loaded the row.
  * @param {CHAR(1)}       @Debug                 [in]  (optional, default='N')
  *   Enables debug logging.
  * @param {DATETIME2}     @ConsistencyDateTime   [out] (optional)
@@ -51,6 +55,8 @@ CREATE PROCEDURE [omd].[GetConsistencyTimestamp]
    @TableList                NVARCHAR(MAX) = NULL
    -- Optional parameters
   ,@MeasurementDateTime      DATETIME2(7)  = NULL
+  ,@SourceTimestampColumn      NVARCHAR(128) = N'LOAD_DATETIME'
+  ,@SourceModuleInstanceColumn NVARCHAR(128) = N'MODULE_INSTANCE_ID'
   ,@Debug                    CHAR(1)       = 'N'
    -- Output parameters
   ,@ConsistencyDateTime      DATETIME2     = NULL OUTPUT
@@ -93,6 +99,10 @@ BEGIN
   SET @MessageLog = [omd].[AddLogMessage](DEFAULT, DEFAULT, N'Parameter @TableList', @LogMessage, @MessageLog)
   SET @LogMessage = CONVERT(NVARCHAR(33), @MeasurementDateTime, 126);
   SET @MessageLog = [omd].[AddLogMessage](DEFAULT, DEFAULT, N'Parameter @MeasurementDateTime', @LogMessage, @MessageLog)
+  SET @LogMessage = @SourceTimestampColumn;
+  SET @MessageLog = [omd].[AddLogMessage](DEFAULT, DEFAULT, N'Parameter @SourceTimestampColumn', @LogMessage, @MessageLog)
+  SET @LogMessage = @SourceModuleInstanceColumn;
+  SET @MessageLog = [omd].[AddLogMessage](DEFAULT, DEFAULT, N'Parameter @SourceModuleInstanceColumn', @LogMessage, @MessageLog)
 
   -- Process variables
   DECLARE @EventDetail NVARCHAR(4000);
@@ -450,16 +460,21 @@ WHERE COALESCE(INTERVAL_END_TIMESTAMP_ORDER, 0) = 1
   BEGIN
     DECLARE @localSourceMaxDateTime DATETIME2(7);
 
-    SET @localSqlStatement = 'SELECT @localSourceMaxDateTime=COALESCE(MAX(LOAD_DATETIME),''0001-01-01'')' + 'FROM ' + @localDataObjectSource + ' sdo ' + 'JOIN omd.MODULE_INSTANCE modinst ON sdo.module_instance_id=modinst.MODULE_INSTANCE_ID ' + 'WHERE 1=1 ' + '--AND modinst.EXECUTION_STATUS_CODE=''Succeeded ' + 'AND LOAD_DATETIME <= ''' + CONVERT(VARCHAR(100), @MeasurementDateTime) + ''''
-
-    -- Commented out EXECUTION_STATUS_CODE line because uncommitted rows should also be evaluated to prevent gaps in the load windows.
+    -- The source timestamp and module instance column names are configurable, as conventions differ per solution.
+    -- No filter on EXECUTION_STATUS_CODE, because uncommitted rows should also be evaluated to prevent gaps in the load windows.
     -- Otherwise, status changes made to 'Succeeded' later on may be left out of the selection.
+    SET @localSqlStatement =
+      N'SELECT @localSourceMaxDateTime = COALESCE(MAX(sdo.' + QUOTENAME(@SourceTimestampColumn) + N'), ''0001-01-01'') ' +
+      N'FROM ' + @localDataObjectSource + N' sdo ' +
+      N'JOIN omd.MODULE_INSTANCE modinst ON sdo.' + QUOTENAME(@SourceModuleInstanceColumn) + N' = modinst.MODULE_INSTANCE_ID ' +
+      N'WHERE sdo.' + QUOTENAME(@SourceTimestampColumn) + N' <= @MeasurementDateTime';
+
     IF @Debug = 'Y'
     BEGIN
       PRINT @localSqlStatement;
     END
 
-    EXECUTE sp_executesql @localSqlStatement, N'@localSourceMaxDateTime DATETIME2(7) OUTPUT', @localSourceMaxDateTime = @localSourceMaxDateTime OUTPUT -- DevSkim: ignore DS224000
+    EXECUTE sp_executesql @localSqlStatement, N'@MeasurementDateTime DATETIME2(7), @localSourceMaxDateTime DATETIME2(7) OUTPUT', @MeasurementDateTime = @MeasurementDateTime, @localSourceMaxDateTime = @localSourceMaxDateTime OUTPUT -- DevSkim: ignore DS224000
 
     IF @Debug = 'Y'
     BEGIN
