@@ -1,0 +1,255 @@
+/*
+ * DIRECT Framework - Snowflake edition
+ * 05 Registration procedures
+ *
+ * REGISTER_BATCH, REGISTER_MODULE, ADD_MODULE_TO_BATCH and
+ * ADD_BATCH_TO_PARENT_BATCH register the metadata that a run needs. They can be
+ * run again: an existing Batch or Module is updated when its attributes changed
+ * (the active indicator is left alone, so it can be managed separately), and an
+ * existing relationship keeps its active indicator.
+ */
+
+CREATE OR REPLACE PROCEDURE <% database %>.OMD.REGISTER_BATCH
+(
+    P_BATCH_CODE         VARCHAR,
+    P_BATCH_TYPE         VARCHAR DEFAULT 'Batch',
+    P_FREQUENCY_CODE     VARCHAR DEFAULT 'On-demand',
+    P_BATCH_DESCRIPTION  VARCHAR DEFAULT '',
+    P_ACTIVE_INDICATOR   VARCHAR DEFAULT 'Y'
+)
+RETURNS NUMBER
+LANGUAGE SQL
+COMMENT = 'Registers a Batch, or updates its attributes when it exists. Returns the Batch Id.'
+EXECUTE AS OWNER
+AS
+$$
+DECLARE
+    V_BATCH_ID NUMBER;
+BEGIN
+    IF (P_BATCH_CODE IS NULL OR TRIM(P_BATCH_CODE) = '') THEN
+        RETURN NULL;
+    END IF;
+
+    SELECT MAX(BATCH_ID) INTO :V_BATCH_ID FROM <% database %>.OMD.BATCH WHERE BATCH_CODE = :P_BATCH_CODE;
+
+    IF (V_BATCH_ID IS NULL) THEN
+        SELECT <% database %>.OMD.BATCH_SEQ.NEXTVAL INTO :V_BATCH_ID;
+        INSERT INTO <% database %>.OMD.BATCH (BATCH_ID, BATCH_CODE, BATCH_TYPE, FREQUENCY_CODE, ACTIVE_INDICATOR, BATCH_DESCRIPTION)
+        VALUES (:V_BATCH_ID, :P_BATCH_CODE, :P_BATCH_TYPE, COALESCE(:P_FREQUENCY_CODE, 'On-demand'), COALESCE(:P_ACTIVE_INDICATOR, 'Y'), :P_BATCH_DESCRIPTION);
+    ELSE
+        UPDATE <% database %>.OMD.BATCH
+        SET BATCH_TYPE = :P_BATCH_TYPE,
+            FREQUENCY_CODE = COALESCE(:P_FREQUENCY_CODE, 'On-demand'),
+            BATCH_DESCRIPTION = :P_BATCH_DESCRIPTION
+        WHERE BATCH_ID = :V_BATCH_ID
+          AND (COALESCE(BATCH_TYPE, '') <> COALESCE(:P_BATCH_TYPE, '')
+            OR FREQUENCY_CODE <> COALESCE(:P_FREQUENCY_CODE, 'On-demand')
+            OR COALESCE(BATCH_DESCRIPTION, '') <> COALESCE(:P_BATCH_DESCRIPTION, ''));
+    END IF;
+
+    RETURN V_BATCH_ID;
+END;
+$$;
+
+CREATE OR REPLACE PROCEDURE <% database %>.OMD.REGISTER_MODULE
+(
+    P_MODULE_CODE         VARCHAR,
+    P_EXECUTABLE          VARCHAR DEFAULT 'SELECT NULL',
+    P_AREA_CODE           VARCHAR DEFAULT 'MAINT',
+    P_DATA_OBJECT_SOURCE  VARCHAR DEFAULT 'N/A',
+    P_DATA_OBJECT_TARGET  VARCHAR DEFAULT 'N/A',
+    P_MODULE_DESCRIPTION  VARCHAR DEFAULT '',
+    P_MODULE_TYPE         VARCHAR DEFAULT 'DataLogistics',
+    P_FREQUENCY_CODE      VARCHAR DEFAULT 'On-demand',
+    P_ACTIVE_INDICATOR    VARCHAR DEFAULT 'Y'
+)
+RETURNS NUMBER
+LANGUAGE SQL
+COMMENT = 'Registers a Module, or updates its attributes when it exists. Returns the Module Id. The executable may use the tokens :ModuleInstanceId, :StartValue, :EndValue and :ConsistencyDateTime.'
+EXECUTE AS OWNER
+AS
+$$
+DECLARE
+    V_MODULE_ID NUMBER;
+BEGIN
+    IF (P_MODULE_CODE IS NULL OR TRIM(P_MODULE_CODE) = '') THEN
+        RETURN NULL;
+    END IF;
+
+    SELECT MAX(MODULE_ID) INTO :V_MODULE_ID FROM <% database %>.OMD.MODULE WHERE MODULE_CODE = :P_MODULE_CODE;
+
+    IF (V_MODULE_ID IS NULL) THEN
+        SELECT <% database %>.OMD.MODULE_SEQ.NEXTVAL INTO :V_MODULE_ID;
+        INSERT INTO <% database %>.OMD.MODULE (MODULE_ID, MODULE_CODE, MODULE_TYPE, DATA_OBJECT_SOURCE, DATA_OBJECT_TARGET, AREA_CODE, FREQUENCY_CODE, ACTIVE_INDICATOR, MODULE_DESCRIPTION, EXECUTABLE)
+        VALUES (:V_MODULE_ID, :P_MODULE_CODE, COALESCE(:P_MODULE_TYPE, 'DataLogistics'), COALESCE(:P_DATA_OBJECT_SOURCE, 'N/A'), COALESCE(:P_DATA_OBJECT_TARGET, 'N/A'),
+                COALESCE(:P_AREA_CODE, 'MAINT'), COALESCE(:P_FREQUENCY_CODE, 'On-demand'), COALESCE(:P_ACTIVE_INDICATOR, 'Y'), :P_MODULE_DESCRIPTION, :P_EXECUTABLE);
+    ELSE
+        UPDATE <% database %>.OMD.MODULE
+        SET MODULE_TYPE = COALESCE(:P_MODULE_TYPE, 'DataLogistics'),
+            DATA_OBJECT_SOURCE = COALESCE(:P_DATA_OBJECT_SOURCE, 'N/A'),
+            DATA_OBJECT_TARGET = COALESCE(:P_DATA_OBJECT_TARGET, 'N/A'),
+            AREA_CODE = COALESCE(:P_AREA_CODE, 'MAINT'),
+            FREQUENCY_CODE = COALESCE(:P_FREQUENCY_CODE, 'On-demand'),
+            MODULE_DESCRIPTION = :P_MODULE_DESCRIPTION,
+            EXECUTABLE = :P_EXECUTABLE
+        WHERE MODULE_ID = :V_MODULE_ID
+          AND (MODULE_TYPE <> COALESCE(:P_MODULE_TYPE, 'DataLogistics')
+            OR DATA_OBJECT_SOURCE <> COALESCE(:P_DATA_OBJECT_SOURCE, 'N/A')
+            OR DATA_OBJECT_TARGET <> COALESCE(:P_DATA_OBJECT_TARGET, 'N/A')
+            OR AREA_CODE <> COALESCE(:P_AREA_CODE, 'MAINT')
+            OR FREQUENCY_CODE <> COALESCE(:P_FREQUENCY_CODE, 'On-demand')
+            OR COALESCE(MODULE_DESCRIPTION, '') <> COALESCE(:P_MODULE_DESCRIPTION, '')
+            OR COALESCE(EXECUTABLE, '') <> COALESCE(:P_EXECUTABLE, ''));
+    END IF;
+
+    RETURN V_MODULE_ID;
+END;
+$$;
+
+CREATE OR REPLACE PROCEDURE <% database %>.OMD.ADD_MODULE_TO_BATCH
+(
+    P_MODULE_CODE       VARCHAR,
+    P_BATCH_CODE        VARCHAR,
+    P_SEQUENCE          NUMBER DEFAULT NULL,
+    P_ACTIVE_INDICATOR  VARCHAR DEFAULT 'Y'
+)
+RETURNS VARCHAR
+LANGUAGE SQL
+COMMENT = 'Adds a Module to a Batch at the given position (default: after the last Module). An existing relationship gets the new position when one is given.'
+EXECUTE AS OWNER
+AS
+$$
+DECLARE
+    V_MODULE_ID NUMBER;
+    V_BATCH_ID NUMBER;
+    V_SEQUENCE NUMBER;
+    V_EXISTS NUMBER;
+BEGIN
+    V_MODULE_ID := <% database %>.OMD.GET_MODULE_ID_BY_CODE(P_MODULE_CODE);
+    V_BATCH_ID := <% database %>.OMD.GET_BATCH_ID_BY_CODE(P_BATCH_CODE);
+
+    IF (V_MODULE_ID IS NULL) THEN
+        RETURN 'The Module ''' || COALESCE(P_MODULE_CODE, '') || ''' is not registered.';
+    END IF;
+    IF (V_BATCH_ID IS NULL) THEN
+        RETURN 'The Batch ''' || COALESCE(P_BATCH_CODE, '') || ''' is not registered.';
+    END IF;
+
+    SELECT COUNT(*) INTO :V_EXISTS FROM <% database %>.OMD.BATCH_MODULE WHERE BATCH_ID = :V_BATCH_ID AND MODULE_ID = :V_MODULE_ID;
+
+    IF (V_EXISTS > 0) THEN
+        IF (P_SEQUENCE IS NOT NULL) THEN
+            UPDATE <% database %>.OMD.BATCH_MODULE SET SEQUENCE = :P_SEQUENCE WHERE BATCH_ID = :V_BATCH_ID AND MODULE_ID = :V_MODULE_ID AND SEQUENCE <> :P_SEQUENCE;
+        END IF;
+        RETURN 'The Module ''' || P_MODULE_CODE || ''' is already part of Batch ''' || P_BATCH_CODE || '''.';
+    END IF;
+
+    IF (P_SEQUENCE IS NULL) THEN
+        SELECT COALESCE(MAX(SEQUENCE), 0) + 1 INTO :V_SEQUENCE FROM <% database %>.OMD.BATCH_MODULE WHERE BATCH_ID = :V_BATCH_ID;
+    ELSE
+        V_SEQUENCE := P_SEQUENCE;
+    END IF;
+
+    INSERT INTO <% database %>.OMD.BATCH_MODULE (BATCH_ID, MODULE_ID, SEQUENCE, ACTIVE_INDICATOR)
+    VALUES (:V_BATCH_ID, :V_MODULE_ID, :V_SEQUENCE, COALESCE(:P_ACTIVE_INDICATOR, 'Y'));
+
+    RETURN 'The Module ''' || P_MODULE_CODE || ''' was added to Batch ''' || P_BATCH_CODE || ''' at position ' || TO_VARCHAR(V_SEQUENCE) || '.';
+END;
+$$;
+
+CREATE OR REPLACE PROCEDURE <% database %>.OMD.ADD_BATCH_TO_PARENT_BATCH
+(
+    P_BATCH_CODE         VARCHAR,
+    P_PARENT_BATCH_CODE  VARCHAR,
+    P_SEQUENCE           NUMBER DEFAULT NULL,
+    P_ACTIVE_INDICATOR   VARCHAR DEFAULT 'Y'
+)
+RETURNS VARCHAR
+LANGUAGE SQL
+COMMENT = 'Adds a Batch as child of a parent Batch at the given position (default: after the last child). A relationship that would create a cycle is refused.'
+EXECUTE AS OWNER
+AS
+$$
+DECLARE
+    V_BATCH_ID NUMBER;
+    V_PARENT_BATCH_ID NUMBER;
+    V_SEQUENCE NUMBER;
+    V_EXISTS NUMBER;
+    V_CYCLE NUMBER;
+BEGIN
+    V_BATCH_ID := <% database %>.OMD.GET_BATCH_ID_BY_CODE(P_BATCH_CODE);
+    V_PARENT_BATCH_ID := <% database %>.OMD.GET_BATCH_ID_BY_CODE(P_PARENT_BATCH_CODE);
+
+    IF (V_BATCH_ID IS NULL) THEN
+        RETURN 'The Batch ''' || COALESCE(P_BATCH_CODE, '') || ''' is not registered.';
+    END IF;
+    IF (V_PARENT_BATCH_ID IS NULL) THEN
+        RETURN 'The parent Batch ''' || COALESCE(P_PARENT_BATCH_CODE, '') || ''' is not registered.';
+    END IF;
+    IF (V_BATCH_ID = V_PARENT_BATCH_ID) THEN
+        RETURN 'A Batch cannot be its own parent.';
+    END IF;
+
+    -- The parent, or any of its ancestors, must not be the child: that would be a cycle.
+    SELECT COUNT(*) INTO :V_CYCLE
+    FROM
+    (
+        WITH RECURSIVE ANCESTORS AS
+        (
+            SELECT PARENT_BATCH_ID, BATCH_ID FROM <% database %>.OMD.BATCH_HIERARCHY WHERE BATCH_ID = :V_PARENT_BATCH_ID
+            UNION ALL
+            SELECT bh.PARENT_BATCH_ID, bh.BATCH_ID
+            FROM <% database %>.OMD.BATCH_HIERARCHY bh
+            JOIN ANCESTORS a ON bh.BATCH_ID = a.PARENT_BATCH_ID
+        )
+        SELECT PARENT_BATCH_ID FROM ANCESTORS WHERE PARENT_BATCH_ID = :V_BATCH_ID
+    ) cycles;
+
+    IF (V_CYCLE > 0) THEN
+        RETURN 'Adding Batch ''' || P_BATCH_CODE || ''' under ''' || P_PARENT_BATCH_CODE || ''' would create a cycle.';
+    END IF;
+
+    SELECT COUNT(*) INTO :V_EXISTS FROM <% database %>.OMD.BATCH_HIERARCHY WHERE PARENT_BATCH_ID = :V_PARENT_BATCH_ID AND BATCH_ID = :V_BATCH_ID;
+
+    IF (V_EXISTS > 0) THEN
+        IF (P_SEQUENCE IS NOT NULL) THEN
+            UPDATE <% database %>.OMD.BATCH_HIERARCHY SET SEQUENCE = :P_SEQUENCE WHERE PARENT_BATCH_ID = :V_PARENT_BATCH_ID AND BATCH_ID = :V_BATCH_ID AND SEQUENCE <> :P_SEQUENCE;
+        END IF;
+        RETURN 'The Batch ''' || P_BATCH_CODE || ''' is already a child of ''' || P_PARENT_BATCH_CODE || '''.';
+    END IF;
+
+    IF (P_SEQUENCE IS NULL) THEN
+        SELECT COALESCE(MAX(SEQUENCE), 0) + 1 INTO :V_SEQUENCE FROM <% database %>.OMD.BATCH_HIERARCHY WHERE PARENT_BATCH_ID = :V_PARENT_BATCH_ID;
+    ELSE
+        V_SEQUENCE := P_SEQUENCE;
+    END IF;
+
+    INSERT INTO <% database %>.OMD.BATCH_HIERARCHY (PARENT_BATCH_ID, BATCH_ID, SEQUENCE, ACTIVE_INDICATOR)
+    VALUES (:V_PARENT_BATCH_ID, :V_BATCH_ID, :V_SEQUENCE, COALESCE(:P_ACTIVE_INDICATOR, 'Y'));
+
+    RETURN 'The Batch ''' || P_BATCH_CODE || ''' was added to ''' || P_PARENT_BATCH_CODE || ''' at position ' || TO_VARCHAR(V_SEQUENCE) || '.';
+END;
+$$;
+
+CREATE OR REPLACE PROCEDURE <% database %>.OMD.SET_SETTING
+(
+    P_CODE   VARCHAR,
+    P_VALUE  VARCHAR
+)
+RETURNS VARCHAR
+LANGUAGE SQL
+COMMENT = 'Sets the value of a framework setting in OMD_METADATA.FRAMEWORK_METADATA. The setting must exist.'
+EXECUTE AS OWNER
+AS
+$$
+DECLARE
+    V_EXISTS NUMBER;
+BEGIN
+    SELECT COUNT(*) INTO :V_EXISTS FROM <% database %>.OMD_METADATA.FRAMEWORK_METADATA WHERE CODE = :P_CODE;
+    IF (V_EXISTS = 0) THEN
+        RETURN 'The setting ''' || COALESCE(P_CODE, '') || ''' does not exist.';
+    END IF;
+    UPDATE <% database %>.OMD_METADATA.FRAMEWORK_METADATA SET VALUE = :P_VALUE WHERE CODE = :P_CODE;
+    RETURN 'The setting ''' || P_CODE || ''' is now ''' || COALESCE(P_VALUE, '') || '''.';
+END;
+$$;
