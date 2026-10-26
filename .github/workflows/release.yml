@@ -136,6 +136,15 @@ jobs:
         with:
           dotnet-version: 10.0.x
 
+      - name: Install sqlcmd
+        # The migration test runs the pre-dacpac deployment script through sqlcmd (the Go edition, as on a
+        # developer machine), which the Linux runner does not carry.
+        run: |
+          set -euo pipefail
+          curl -sSL -o /tmp/sqlcmd.tar.bz2 https://github.com/microsoft/go-sqlcmd/releases/download/v1.10.0/sqlcmd-linux-amd64.tar.bz2
+          sudo tar -xjf /tmp/sqlcmd.tar.bz2 -C /usr/local/bin sqlcmd
+          sqlcmd --version
+
       - name: Replace the next release folder with the build output
         uses: actions/download-artifact@v4
         with:
