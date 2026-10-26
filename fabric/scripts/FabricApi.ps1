@@ -24,14 +24,19 @@ function Get-FabricAccessToken {
   <#
   .SYNOPSIS
       Returns a bearer token for the Fabric REST API from the current Az context.
+  .PARAMETER TenantId
+      Entra tenant to get the token for, when the signed-in account has several (the default context may be
+      an account without a Fabric license, which Fabric rejects with UserNotLicensed).
   #>
   [CmdletBinding()]
-  param()
+  param([string] $TenantId)
   if (-not (Get-Module -ListAvailable -Name Az.Accounts)) {
     throw 'The Az.Accounts module is required (Install-Module Az.Accounts) and you must be signed in with Connect-AzAccount.'
   }
   Import-Module Az.Accounts -ErrorAction Stop
-  $tokenResult = Get-AzAccessToken -ResourceUrl 'https://api.fabric.microsoft.com' -ErrorAction Stop
+  $tokenArguments = @{ ResourceUrl = 'https://api.fabric.microsoft.com'; ErrorAction = 'Stop' }
+  if (-not [string]::IsNullOrWhiteSpace($TenantId)) { $tokenArguments.TenantId = $TenantId }
+  $tokenResult = Get-AzAccessToken @tokenArguments
   $token = $tokenResult.Token
   if ($token -is [System.Security.SecureString]) { $token = ConvertFrom-SecureString -SecureString $token -AsPlainText }
   return $token

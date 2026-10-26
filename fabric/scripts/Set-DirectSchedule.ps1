@@ -11,6 +11,8 @@
 
 .PARAMETER WorkspaceId
     The Fabric workspace id.
+.PARAMETER TenantId
+    Entra tenant of the Fabric account, when the signed-in Az account spans several tenants or the default context is not the licensed one.
 .PARAMETER PipelineName
     'DIRECT Run Project' or 'DIRECT Run Batch'. Default 'DIRECT Run Project'.
 .PARAMETER BatchCode
@@ -38,6 +40,7 @@
 [CmdletBinding(SupportsShouldProcess)]
 param(
   [Parameter(Mandatory)][string] $WorkspaceId,
+  [string] $TenantId,
   [ValidateSet('DIRECT Run Project', 'DIRECT Run Batch')][string] $PipelineName = 'DIRECT Run Project',
   [string] $BatchCode,
   [ValidateRange(1, 1440)][int] $IntervalMinutes = 5,
@@ -49,7 +52,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 . (Join-Path -Path $PSScriptRoot -ChildPath 'FabricApi.ps1')
 
-$token = Get-FabricAccessToken
+$token = Get-FabricAccessToken -TenantId $TenantId
 $pipeline = Get-FabricItem -Token $token -WorkspaceId $WorkspaceId -DisplayName $PipelineName -Type 'DataPipeline'
 if ($null -eq $pipeline) { throw "Pipeline '$PipelineName' was not found in workspace $WorkspaceId." }
 $itemPath = "workspaces/$WorkspaceId/items/$($pipeline.id)"

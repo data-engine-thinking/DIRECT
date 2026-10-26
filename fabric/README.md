@@ -86,6 +86,8 @@ cd fabric/scripts
 ./Set-DirectSchedule.ps1 -WorkspaceId <workspace id> -Disable
 ```
 
+All three scripts take `-TenantId` for accounts that span several Entra tenants; the token comes from the Az context of a user with a Fabric license.
+
 `Deploy-DirectFabric.ps1` creates the two connections for the signed-in user when no connection ids are given (a workspace identity is refused by Fabric for connections to a SQL database in Fabric), creates or updates the Variable Library with the values, and creates or updates the three pipelines from `items/*.DataPipeline/pipeline-content.json`. It is safe to run again.
 
 **Git integration (your own workspace).** The `items` folder follows the Fabric Git item layout (`<name>.DataPipeline` with `.platform` and `pipeline-content.json`, `DIRECT.VariableLibrary` with `variables.json` and `settings.json`). Point the workspace Git connection at this folder, or copy the item folders into the folder that is connected, and set the Variable Library values for the workspace after the first sync. The connections still have to exist; create them in the portal (Manage connections and gateways) or with `Deploy-DirectFabric.ps1`.

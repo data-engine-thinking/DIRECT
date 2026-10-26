@@ -20,6 +20,8 @@
 
 .PARAMETER WorkspaceId
     The Fabric workspace id.
+.PARAMETER TenantId
+    Entra tenant of the Fabric account, when the signed-in Az account spans several tenants or the default context is not the licensed one.
 .PARAMETER RepositoryDatabaseItemId
     Item id of the SQL database in Fabric that holds the DIRECT repository.
 .PARAMETER WarehouseItemId
@@ -55,6 +57,7 @@
 [CmdletBinding(SupportsShouldProcess)]
 param(
   [Parameter(Mandatory)][string] $WorkspaceId,
+  [string] $TenantId,
   [Parameter(Mandatory)][string] $RepositoryDatabaseItemId,
   [Parameter(Mandatory)][string] $WarehouseItemId,
   [string] $WarehouseEndpoint,
@@ -76,7 +79,7 @@ $itemsFolder = Join-Path -Path $fabricRoot -ChildPath 'items'
 $libraryName = 'DIRECT'
 $pipelineNames = @('DIRECT Run Batch', 'DIRECT Run Module', 'DIRECT Run Project')
 
-$token = Get-FabricAccessToken
+$token = Get-FabricAccessToken -TenantId $TenantId
 
 # 1. Warehouse endpoint
 if ([string]::IsNullOrWhiteSpace($WarehouseEndpoint)) {
