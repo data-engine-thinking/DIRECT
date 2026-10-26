@@ -3,7 +3,7 @@
   "metadata": {
     "type": "DataPipeline",
     "displayName": "DIRECT Run Module",
-    "description": "Runs one DIRECT Module outside a Batch: opens and evaluates the Module Instance in the repository, runs the executable on the Warehouse, and closes the instance with the outcome. Standard DIRECT asset; configure through the DIRECT Variable Library."
+    "description": "Runs one DIRECT Module outside a Batch: opens the Module Instance in the repository, runs the executable on the Warehouse, closes the instance with the outcome. Configured by the DIRECT Variable Library."
   },
   "config": {
     "version": "2.0",

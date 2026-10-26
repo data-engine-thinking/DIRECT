@@ -152,7 +152,9 @@ foreach ($pipelineName in $pipelineNames) {
   $definitionFile = Join-Path -Path $itemsFolder -ChildPath "$pipelineName.DataPipeline/pipeline-content.json"
   if (-not (Test-Path -Path $definitionFile)) { throw "Pipeline definition not found: $definitionFile (run Build-PipelineDefinitions.ps1)" }
   $content = Get-Content -Path $definitionFile -Raw
-  $description = ($content | ConvertFrom-Json).properties.description
+  # Fabric limits an item description to 256 characters
+  $description = [string] ($content | ConvertFrom-Json).properties.description
+  if ($description.Length -gt 256) { $description = $description.Substring(0, 256) }
   $parts = @((ConvertTo-FabricDefinitionPart -Path 'pipeline-content.json' -Content $content))
   if ($PSCmdlet.ShouldProcess($pipelineName, 'Create or update pipeline')) {
     $pipelineId = Set-FabricItemDefinition -Token $token -WorkspaceId $WorkspaceId -DisplayName $pipelineName -Type 'DataPipeline' -Description $description -Parts $parts
