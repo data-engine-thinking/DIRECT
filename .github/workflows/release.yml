@@ -81,15 +81,37 @@ jobs:
         shell: pwsh
         run: dotnet build Direct_Framework/Direct_Framework.sqlproj --configuration Release
 
-      - name: Check the build output
+      - name: Stage the build output as the next release
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          # The post-build script copies the output to the next release folder, which is what the tests deploy.
+          # The project's post-build script copies bin\<Configuration> to the next release folder, but it does not
+          # see the configuration of a dotnet build and looks in bin\Debug, so the copy is done here. The folder
+          # is tracked in git and holds the previous build until then.
+          $source = 'Direct_Framework/bin/Release'
           $db = 'Releases.Direct_Framework/next/db'
+          if (-not (Test-Path (Join-Path $source 'Direct_Framework.dacpac'))) { throw "The build left no Direct_Framework.dacpac in $source." }
+          Get-ChildItem $db -Force | Remove-Item -Recurse -Force
+          Copy-Item -Path (Join-Path $source '*') -Destination $db -Recurse -Force
           foreach ($file in 'Direct_Framework.dacpac', 'master.dacpac') {
             if (-not (Test-Path (Join-Path $db $file))) { throw "$file is missing from $db." }
           }
+
+          # The dacpac must carry the version under test, not a stale one.
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          $zip = [System.IO.Compression.ZipFile]::OpenRead((Resolve-Path (Join-Path $db 'Direct_Framework.dacpac')))
+          try {
+            $entry = $zip.GetEntry('DacMetadata.xml')
+            $reader = [System.IO.StreamReader]::new($entry.Open())
+            $metadata = $reader.ReadToEnd()
+            $reader.Dispose()
+          }
+          finally { $zip.Dispose() }
+          $expected = "${{ steps.version.outputs.version }}.0"
+          if ($metadata -notmatch "<Version>$([regex]::Escape($expected))</Version>") {
+            throw "Direct_Framework.dacpac does not carry version $expected. DacMetadata.xml: $metadata"
+          }
+          Write-Host "Direct_Framework.dacpac version $expected"
           Get-ChildItem $db -Recurse -File | Select-Object FullName, Length | Format-Table -AutoSize
 
       - name: Upload the build output
@@ -126,14 +148,14 @@ jobs:
         # System.Security.Cryptography.Pkcs through DacFx) raises warnings that would fail the restore.
         run: >
           dotnet run --project Direct_Framework.Integration.Tests --configuration Debug --
-          --report-trx --report-trx-filename TestResults.trx --results-directory TestResults
+          --report-trx --report-trx-filename TestResults.trx --results-directory "${{ github.workspace }}/TestResults"
 
       - name: Upload the test results
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: integration-test-results
-          path: Direct_Framework.Integration.Tests/TestResults
+          path: TestResults
           if-no-files-found: ignore
 
   release:
