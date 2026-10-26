@@ -1,0 +1,12 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/fabric/gitIntegration/platformProperties/2.0.0/schema.json",
+  "metadata": {
+    "type": "VariableLibrary",
+    "displayName": "DIRECT",
+    "description": "Settings of the standard DIRECT pipelines for this workspace: repository database and Warehouse items, their connections, load window conventions."
+  },
+  "config": {
+    "version": "2.0",
+    "logicalId": "5b1a6a0e-4d2c-4f7e-9a3b-2c7d1e8f0a10"
+  }
+}

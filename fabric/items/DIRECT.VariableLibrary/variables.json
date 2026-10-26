@@ -1,0 +1,71 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/fabric/item/variableLibrary/definition/variables/1.0.0/schema.json",
+  "variables": [
+    {
+      "name": "WorkspaceId",
+      "note": "Id of the workspace that holds the repository database and the Warehouse.",
+      "type": "String",
+      "value": "00000000-0000-0000-0000-000000000000"
+    },
+    {
+      "name": "RepositoryDatabaseItemId",
+      "note": "Item id of the SQL database in Fabric that holds the DIRECT repository (omd schema).",
+      "type": "String",
+      "value": "00000000-0000-0000-0000-000000000000"
+    },
+    {
+      "name": "RepositoryConnectionId",
+      "note": "Id of a Fabric SQL database connection (OAuth2, caller identity) to the repository database.",
+      "type": "String",
+      "value": "00000000-0000-0000-0000-000000000000"
+    },
+    {
+      "name": "WarehouseItemId",
+      "note": "Item id of the Fabric Warehouse that holds the data and the Module executables (procedures).",
+      "type": "String",
+      "value": "00000000-0000-0000-0000-000000000000"
+    },
+    {
+      "name": "WarehouseEndpoint",
+      "note": "SQL endpoint of the Warehouse (xxx.datawarehouse.fabric.microsoft.com).",
+      "type": "String",
+      "value": "replace-with-warehouse-endpoint.datawarehouse.fabric.microsoft.com"
+    },
+    {
+      "name": "WarehouseConnectionId",
+      "note": "Id of a Warehouse connection (OAuth2, caller identity) to the Warehouse.",
+      "type": "String",
+      "value": "00000000-0000-0000-0000-000000000000"
+    },
+    {
+      "name": "ModuleInstanceIdColumnName",
+      "note": "Column that holds the Module Instance Id in the target data objects; used to build rollback statements.",
+      "type": "String",
+      "value": "MODULE_INSTANCE_ID"
+    },
+    {
+      "name": "DefaultStartValue",
+      "note": "Load window start value for a Module that has no load window recorded yet.",
+      "type": "String",
+      "value": "1900-01-01"
+    },
+    {
+      "name": "ConsistencyModuleTypeList",
+      "note": "Comma-separated Module Types that receive a consistency timestamp (omd.GetConsistencyTimestamp). Empty for none.",
+      "type": "String",
+      "value": ""
+    },
+    {
+      "name": "SourceTimestampColumn",
+      "note": "Timestamp column passed to omd.GetConsistencyTimestamp.",
+      "type": "String",
+      "value": "LOAD_DATETIME"
+    },
+    {
+      "name": "LoadWindowAttributeName",
+      "note": "Attribute whose maximum value in the source data object is the end of the load window.",
+      "type": "String",
+      "value": "INSCRIPTION_TIMESTAMP"
+    }
+  ]
+}

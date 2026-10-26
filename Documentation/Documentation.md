@@ -581,3 +581,43 @@ If a rollback impacts a table associated with the source control logging table i
 ```sql
 DELETE FROM SOURCE_CONTROL WHERE MODULE_INSTANCE_ID IN (<Instance array>)
 ```
+
+#### External orchestration
+
+The procedures `omd.RunBatch` and `omd.RunModule` run the Module executables inside the repository database. When the data lives on another engine, for example a Microsoft Fabric Warehouse while the repository is a SQL database in Fabric, an orchestrator outside the database has to run the code. Doing the bookkeeping call by call from an orchestrator is slow and costly, because every call is a round trip and, in a pipeline, an activity run. For this reason the framework offers two procedures that handle a whole Batch in one call each:
+
+```mermaid
+flowchart TD
+%% Nodes
+
+subgraph Repository["Repository database"]
+  CreateBatchModuleInstances("CreateBatchModuleInstances")
+  EndBatchModuleInstances("EndBatchModuleInstances")
+end
+
+subgraph Orchestrator["Orchestrator"]
+  Start("Start of the Batch run"):::Main
+  RunModules("Run the rollback statements and executables of the 'Proceed' rows on the target engine, in sequence, and collect the outcome per Module Instance")
+  End("End of the Batch run"):::Main
+end
+
+%% Edges
+Start --> CreateBatchModuleInstances -- one row per Module --> RunModules -- JSON array of results --> EndBatchModuleInstances --> End
+
+%% Styling
+    classDef Main fill:#BBDEFB,stroke:#1976D2,stroke-width:2px
+```
+
+`omd.CreateBatchModuleInstances` creates and evaluates the Batch Instance and the Module Instances of all active Modules in the Batch (in `SEQUENCE` order), exactly as `omd.RunBatch` would, but executes nothing. With `@IncludeChildBatches = 'Y'` it continues with the active child Batches of the Batch, recursively and in sequence, each with its parent Batch Instance, so that a main Batch that calls a Batch per layer, which call the Batches of that layer, is opened in one call. The rows are in run order (the Modules of a Batch first, then those of its child Batches) and the output parameter `@BatchInstancesJson` lists the Batch Instances that were created. It returns one row per Module with:
+
+* the Module Instance Id, Module Code, Module Type, Area Code and the executable,
+* the previous load window end value from `omd.SOURCE_CONTROL`, which is the start of the next load window,
+* the Internal Processing Status Code of the Module Instance; only `Proceed` rows are to be run, `Cancel` and `Abort` rows have already been closed by the evaluation,
+* the rollback statement to run on the target engine when the evaluation found earlier failed instances (`omd.ModuleEvaluation` with `@ExecuteRollbackIndicator = 'N'`), and
+* for the Module Types listed in `@ConsistencyModuleTypeList`, a consistency timestamp calculated from repository information only (`omd.GetConsistencyTimestamp` with `@SourceDataLookupIndicator = 'N'`).
+
+The orchestrator computes the end of the load window on the target engine, runs the rollback statement and the executable per Module, and reports the outcome of every Module Instance in a JSON array to `omd.EndBatchModuleInstances`. Each element carries the Module Instance Id, the event (`Success` or `Failure`), the load window start and end values, the row counts and, on failure, the error detail. The procedure records the load windows in `omd.SOURCE_CONTROL`, updates the Module Instances, writes failure details to the event log, fails any Module Instance of the Batch Instance that is still executing without a result, and closes the Batch Instance with `Success` when no Module Instance failed and `Failure` otherwise. With `@IncludeChildBatches = 'Y'` the Module Instances of the child Batch Instances are accepted as well, and the child Batch Instances are closed from the deepest level up before the Batch Instance itself; a failed Module Instance or child Batch Instance fails its Batch Instance, as in `omd.RunBatch`. A child Batch Instance that ended in its evaluation (`Abort`, `Cancel`) does not fail the parent.
+
+The view `omd_processing.vw_BATCH_HIERARCHY` lists the parent and child Batches with their sequence, for orchestrators that run the hierarchy themselves.
+
+Standard Microsoft Fabric pipelines that implement this pattern are provided in the `fabric` folder of the repository.

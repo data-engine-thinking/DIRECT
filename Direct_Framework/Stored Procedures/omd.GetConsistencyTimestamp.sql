@@ -3,8 +3,8 @@
  * @description Compute the consistency timestamp across target tables as the minimum end-value of latest successful load windows.
  *
  * @package DIRECT Framework
- * @version 2.1.0
- * @see https://github.com/data-solution-automation-engine/DIRECT
+ * @version 2.2.0
+ * @see https://github.com/data-engine-thinking/DIRECT
  *
  * @param {NVARCHAR(MAX)} @TableList             [in]  (required)
  *   Comma-separated list of target table names.
@@ -14,6 +14,10 @@
  *   Name of the load/inscription timestamp column in the source data objects, used to check for outstanding rows.
  * @param {NVARCHAR(128)} @SourceModuleInstanceColumn [in] (optional, default='MODULE_INSTANCE_ID')
  *   Name of the column in the source data objects that holds the module instance id that loaded the row.
+ * @param {CHAR(1)}       @SourceDataLookupIndicator [in] (optional, default='Y')
+ *   'Y' checks the source data objects for outstanding rows when a logical source group reports no changes.
+ *   'N' relies on the control tables only and treats such a group as up to date; use this when the data
+ *   objects live in another engine (external orchestration) and the load windows are maintained explicitly.
  * @param {CHAR(1)}       @Debug                 [in]  (optional, default='N')
  *   Enables debug logging.
  * @param {DATETIME2}     @ConsistencyDateTime   [out] (optional)
@@ -58,6 +62,7 @@ CREATE PROCEDURE [omd].[GetConsistencyTimestamp]
   ,@MeasurementDateTime      DATETIME2(7)  = NULL
   ,@SourceTimestampColumn      NVARCHAR(128) = N'LOAD_DATETIME'
   ,@SourceModuleInstanceColumn NVARCHAR(128) = N'MODULE_INSTANCE_ID'
+  ,@SourceDataLookupIndicator CHAR(1)      = 'Y'
   ,@Debug                    CHAR(1)       = 'N'
    -- Output parameters
   ,@ConsistencyDateTime      DATETIME2     = NULL OUTPUT
@@ -104,6 +109,8 @@ BEGIN
   SET @MessageLog = [omd].[AddLogMessage](DEFAULT, DEFAULT, N'Parameter @SourceTimestampColumn', @LogMessage, @MessageLog)
   SET @LogMessage = @SourceModuleInstanceColumn;
   SET @MessageLog = [omd].[AddLogMessage](DEFAULT, DEFAULT, N'Parameter @SourceModuleInstanceColumn', @LogMessage, @MessageLog)
+  SET @LogMessage = @SourceDataLookupIndicator;
+  SET @MessageLog = [omd].[AddLogMessage](DEFAULT, DEFAULT, N'Parameter @SourceDataLookupIndicator', @LogMessage, @MessageLog)
 
   -- Process variables
   DECLARE @EventDetail NVARCHAR(4000);
@@ -456,8 +463,21 @@ WHERE COALESCE(INTERVAL_END_TIMESTAMP_ORDER, 0) = 1
     END
   END
 
+  -- If the logical group is up to date and the source data objects cannot be reached from here, trust the control tables.
+  IF @localChangeForLogicalGroup = 'N' AND UPPER(COALESCE(@SourceDataLookupIndicator, 'Y')) <> 'Y'
+  BEGIN
+    INSERT INTO @ConsistencyDateTimeTable
+    VALUES
+      (@localDataObjectSource ,'Y' ,@localIntervalEndDatetime)
+
+    IF @Debug = 'Y'
+    BEGIN
+      PRINT 'Source data lookup is disabled (@SourceDataLookupIndicator = N); this logical group is treated as up to date.';
+    END
+  END
+
   -- If the logical group is up to date, e.g. there are no changes then lookups to the sources are required to assert if there are any outstanding rows.
-  IF @localChangeForLogicalGroup = 'N'
+  IF @localChangeForLogicalGroup = 'N' AND UPPER(COALESCE(@SourceDataLookupIndicator, 'Y')) = 'Y'
   BEGIN
     DECLARE @localSourceMaxDateTime DATETIME2(7);
 

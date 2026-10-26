@@ -1,0 +1,449 @@
+{
+  "properties": {
+    "description": "Runs one DIRECT Module outside a Batch: opens the Module Instance in the repository, runs the executable on the Warehouse, closes the instance with the outcome. Configured by the DIRECT Variable Library.",
+    "concurrency": 1,
+    "parameters": {
+      "ModuleCode": {
+        "type": "string",
+        "defaultValue": ""
+      }
+    },
+    "libraryVariables": {
+      "WorkspaceId": {
+        "type": "String",
+        "variableName": "WorkspaceId",
+        "libraryName": "DIRECT"
+      },
+      "RepositoryDatabaseItemId": {
+        "type": "String",
+        "variableName": "RepositoryDatabaseItemId",
+        "libraryName": "DIRECT"
+      },
+      "RepositoryConnectionId": {
+        "type": "String",
+        "variableName": "RepositoryConnectionId",
+        "libraryName": "DIRECT"
+      },
+      "WarehouseItemId": {
+        "type": "String",
+        "variableName": "WarehouseItemId",
+        "libraryName": "DIRECT"
+      },
+      "WarehouseEndpoint": {
+        "type": "String",
+        "variableName": "WarehouseEndpoint",
+        "libraryName": "DIRECT"
+      },
+      "WarehouseConnectionId": {
+        "type": "String",
+        "variableName": "WarehouseConnectionId",
+        "libraryName": "DIRECT"
+      },
+      "ModuleInstanceIdColumnName": {
+        "type": "String",
+        "variableName": "ModuleInstanceIdColumnName",
+        "libraryName": "DIRECT"
+      },
+      "DefaultStartValue": {
+        "type": "String",
+        "variableName": "DefaultStartValue",
+        "libraryName": "DIRECT"
+      },
+      "ConsistencyModuleTypeList": {
+        "type": "String",
+        "variableName": "ConsistencyModuleTypeList",
+        "libraryName": "DIRECT"
+      },
+      "SourceTimestampColumn": {
+        "type": "String",
+        "variableName": "SourceTimestampColumn",
+        "libraryName": "DIRECT"
+      },
+      "LoadWindowAttributeName": {
+        "type": "String",
+        "variableName": "LoadWindowAttributeName",
+        "libraryName": "DIRECT"
+      }
+    },
+    "activities": [
+      {
+        "name": "Open Module",
+        "type": "Script",
+        "dependsOn": [],
+        "policy": {
+          "timeout": "0.02:00:00",
+          "retry": 0,
+          "retryIntervalInSeconds": 30,
+          "secureOutput": false,
+          "secureInput": false
+        },
+        "connectionSettings": {
+          "name": "DIRECT repository",
+          "properties": {
+            "annotations": [],
+            "type": "FabricSqlDatabase",
+            "typeProperties": {
+              "workspaceId": {
+                "value": "@pipeline().libraryVariables.WorkspaceId",
+                "type": "Expression"
+              },
+              "artifactId": {
+                "value": "@pipeline().libraryVariables.RepositoryDatabaseItemId",
+                "type": "Expression"
+              }
+            },
+            "externalReferences": {
+              "connection": {
+                "value": "@pipeline().libraryVariables.RepositoryConnectionId",
+                "type": "Expression"
+              }
+            }
+          }
+        },
+        "typeProperties": {
+          "scriptBlockExecutionTimeout": "02:00:00",
+          "scripts": [
+            {
+              "type": "Query",
+              "text": {
+                "value": "-- DIRECT Run Module, activity 'Open Module' (repository database).\n-- Opens and evaluates one Module Instance; the rollback statement is returned, not executed.\n-- Returns one row: MODULE_INSTANCE_ID, INTERNAL_PROCESSING_STATUS_CODE, MODULE_CODE and\n--   MODULES (JSON array with the Module to run in the shape of omd.CreateBatchModuleInstances; empty unless 'Proceed').\n-- Parameters: @ModuleCode, @ExecutionContext, @ModuleInstanceIdColumnName, @DefaultStartValue, @ConsistencyModuleTypeList, @SourceTimestampColumn.\nSET NOCOUNT ON;\n\nDECLARE @ModuleInstanceId BIGINT;\nDECLARE @InternalProcessingStatusCode NVARCHAR(100);\nDECLARE @RollbackStatement NVARCHAR(MAX);\nDECLARE @SuccessIndicator CHAR(1) = 'N';\nDECLARE @MessageLog NVARCHAR(MAX);\nDECLARE @ErrorMessage NVARCHAR(2048);\nDECLARE @ModuleId INT, @ModuleType NVARCHAR(100), @DataObjectSource NVARCHAR(1000);\nDECLARE @ConsistencyDateTime DATETIME2(7), @ConsistencyDateTimeString NVARCHAR(27);\nDECLARE @StartValue NVARCHAR(100) = COALESCE(NULLIF(TRIM(@DefaultStartValue), N''), N'1900-01-01');\n\nEXEC [omd].[CreateModuleInstance]\n   @ModuleCode        = @ModuleCode\n  ,@ExecutionContext  = @ExecutionContext\n  ,@ModuleInstanceId  = @ModuleInstanceId OUTPUT\n  ,@SuccessIndicator  = @SuccessIndicator OUTPUT\n  ,@MessageLog        = @MessageLog OUTPUT;\n\nIF @SuccessIndicator <> 'Y' OR @ModuleInstanceId IS NULL\nBEGIN\n  SET @ErrorMessage = LEFT(N'DIRECT could not open Module ''' + COALESCE(@ModuleCode, N'') + N''': ' + COALESCE(@MessageLog, N''), 2048);\n  THROW 50000, @ErrorMessage, 1;\nEND;\n\nEXEC [omd].[ModuleEvaluation]\n   @ModuleInstanceId               = @ModuleInstanceId\n  ,@ModuleInstanceIdColumnName     = @ModuleInstanceIdColumnName\n  ,@ExecuteRollbackIndicator       = 'N'\n  ,@InternalProcessingStatusCode   = @InternalProcessingStatusCode OUTPUT\n  ,@RollbackStatement              = @RollbackStatement OUTPUT\n  ,@SuccessIndicator               = @SuccessIndicator OUTPUT\n  ,@MessageLog                     = @MessageLog OUTPUT;\n\nSET @InternalProcessingStatusCode = COALESCE(@InternalProcessingStatusCode, N'Abort');\nSET @ModuleId = [omd].[GetModuleIdByModuleInstanceId](@ModuleInstanceId);\n\nSELECT @ModuleType = MODULE_TYPE, @DataObjectSource = DATA_OBJECT_SOURCE FROM [omd].[MODULE] WHERE MODULE_ID = @ModuleId;\n\nIF @InternalProcessingStatusCode = N'Proceed'\n   AND @DataObjectSource IS NOT NULL\n   AND EXISTS (SELECT 1 FROM STRING_SPLIT(COALESCE(@ConsistencyModuleTypeList, N''), ',') WHERE TRIM([value]) = @ModuleType)\nBEGIN\n  EXEC [omd].[GetConsistencyTimestamp]\n     @TableList                   = @DataObjectSource\n    ,@SourceTimestampColumn       = @SourceTimestampColumn\n    ,@SourceModuleInstanceColumn  = @ModuleInstanceIdColumnName\n    ,@SourceDataLookupIndicator   = 'N'\n    ,@ConsistencyDateTime         = @ConsistencyDateTime OUTPUT;\n  SET @ConsistencyDateTimeString = CASE WHEN @ConsistencyDateTime IS NULL THEN NULL ELSE FORMAT(@ConsistencyDateTime, 'yyyy-MM-dd HH:mm:ss.fffffff') END;\nEND;\n\nDECLARE @Modules NVARCHAR(MAX) =\n(\n  SELECT\n     CONVERT(BIGINT, 0) AS BATCH_INSTANCE_ID\n    ,CONVERT(NVARCHAR(500), NULL) AS BATCH_CODE\n    ,@ModuleInstanceId AS MODULE_INSTANCE_ID\n    ,m.MODULE_ID\n    ,m.MODULE_CODE\n    ,m.MODULE_TYPE\n    ,m.AREA_CODE\n    ,1 AS [SEQUENCE]\n    ,m.EXECUTABLE\n    ,m.DATA_OBJECT_SOURCE\n    ,m.DATA_OBJECT_TARGET\n    ,COALESCE([omd].[GetModuleLoadWindowValue](m.MODULE_ID, 2), @StartValue) AS PREVIOUS_END_VALUE\n    ,@InternalProcessingStatusCode AS INTERNAL_PROCESSING_STATUS_CODE\n    ,@RollbackStatement AS ROLLBACK_STATEMENT\n    ,@ConsistencyDateTimeString AS CONSISTENCY_DATETIME\n  FROM [omd].[MODULE] m\n  WHERE m.MODULE_ID = @ModuleId\n    AND @InternalProcessingStatusCode = N'Proceed'\n  FOR JSON PATH\n);\n\nSELECT\n   @ModuleInstanceId AS MODULE_INSTANCE_ID\n  ,@InternalProcessingStatusCode AS INTERNAL_PROCESSING_STATUS_CODE\n  ,@ModuleCode AS MODULE_CODE\n  ,COALESCE(@Modules, N'[]') AS MODULES;",
+                "type": "Expression"
+              },
+              "parameters": [
+                {
+                  "name": "ModuleCode",
+                  "type": "String",
+                  "size": "500",
+                  "direction": "Input",
+                  "value": {
+                    "value": "@pipeline().parameters.ModuleCode",
+                    "type": "Expression"
+                  }
+                },
+                {
+                  "name": "ExecutionContext",
+                  "type": "String",
+                  "size": "4000",
+                  "direction": "Input",
+                  "value": {
+                    "value": "@concat('Fabric pipeline run ', pipeline().RunId, ' of ', pipeline().Pipeline)",
+                    "type": "Expression"
+                  }
+                },
+                {
+                  "name": "ModuleInstanceIdColumnName",
+                  "type": "String",
+                  "size": "1000",
+                  "direction": "Input",
+                  "value": {
+                    "value": "@pipeline().libraryVariables.ModuleInstanceIdColumnName",
+                    "type": "Expression"
+                  }
+                },
+                {
+                  "name": "DefaultStartValue",
+                  "type": "String",
+                  "size": "100",
+                  "direction": "Input",
+                  "value": {
+                    "value": "@pipeline().libraryVariables.DefaultStartValue",
+                    "type": "Expression"
+                  }
+                },
+                {
+                  "name": "ConsistencyModuleTypeList",
+                  "type": "String",
+                  "size": "4000",
+                  "direction": "Input",
+                  "value": {
+                    "value": "@pipeline().libraryVariables.ConsistencyModuleTypeList",
+                    "type": "Expression"
+                  }
+                },
+                {
+                  "name": "SourceTimestampColumn",
+                  "type": "String",
+                  "size": "128",
+                  "direction": "Input",
+                  "value": {
+                    "value": "@pipeline().libraryVariables.SourceTimestampColumn",
+                    "type": "Expression"
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "description": "Creates and evaluates the Module Instance; returns the Module to run."
+      },
+      {
+        "name": "Run Modules",
+        "type": "Script",
+        "dependsOn": [
+          {
+            "activity": "Open Module",
+            "dependencyConditions": [
+              "Succeeded"
+            ]
+          }
+        ],
+        "policy": {
+          "timeout": "0.02:00:00",
+          "retry": 0,
+          "retryIntervalInSeconds": 30,
+          "secureOutput": false,
+          "secureInput": false
+        },
+        "connectionSettings": {
+          "name": "Target Warehouse",
+          "properties": {
+            "annotations": [],
+            "type": "DataWarehouse",
+            "typeProperties": {
+              "workspaceId": {
+                "value": "@pipeline().libraryVariables.WorkspaceId",
+                "type": "Expression"
+              },
+              "artifactId": {
+                "value": "@pipeline().libraryVariables.WarehouseItemId",
+                "type": "Expression"
+              },
+              "endpoint": {
+                "value": "@pipeline().libraryVariables.WarehouseEndpoint",
+                "type": "Expression"
+              }
+            },
+            "externalReferences": {
+              "connection": {
+                "value": "@pipeline().libraryVariables.WarehouseConnectionId",
+                "type": "Expression"
+              }
+            }
+          }
+        },
+        "typeProperties": {
+          "scriptBlockExecutionTimeout": "02:00:00",
+          "scripts": [
+            {
+              "type": "Query",
+              "text": {
+                "value": "-- DIRECT Run Batch / Run Module, activity 'Run Modules' (target engine, Fabric Warehouse).\n-- Runs the Modules in @Modules (JSON array with the rows of omd.CreateBatchModuleInstances) in array order, which is the\n-- run order of the Batch and its child Batches.\n-- Per Module: rollback statement (if any), load window end from the source data object, the executable through\n-- sp_executesql with the parameters @ModuleInstanceId, @StartValue, @EndValue and @ConsistencyDateTime, and the\n-- target row count before and after. One result row per Module, in the shape omd.EndBatchModuleInstances expects.\n-- Parameters: @Modules (string, JSON), @LoadWindowAttributeName (string).\nCREATE TABLE #modules\n(\n   [SEQ]                            INT\n  ,[BATCH_CODE]                     VARCHAR(500)\n  ,[MODULE_INSTANCE_ID]             BIGINT\n  ,[MODULE_CODE]                    VARCHAR(500)\n  ,[EXECUTABLE]                     VARCHAR(8000)\n  ,[DATA_OBJECT_SOURCE]             VARCHAR(1000)\n  ,[DATA_OBJECT_TARGET]             VARCHAR(1000)\n  ,[PREVIOUS_END_VALUE]             VARCHAR(100)\n  ,[INTERNAL_PROCESSING_STATUS_CODE] VARCHAR(100)\n  ,[ROLLBACK_STATEMENT]             VARCHAR(8000)\n  ,[CONSISTENCY_DATETIME]           VARCHAR(100)\n);\n\nINSERT INTO #modules\nSELECT\n   ROW_NUMBER() OVER (ORDER BY TRY_CONVERT(INT, arr.[key]))\n  ,r.[BATCH_CODE], r.[MODULE_INSTANCE_ID], r.[MODULE_CODE], r.[EXECUTABLE], r.[DATA_OBJECT_SOURCE], r.[DATA_OBJECT_TARGET], r.[PREVIOUS_END_VALUE]\n  ,r.[INTERNAL_PROCESSING_STATUS_CODE], r.[ROLLBACK_STATEMENT], r.[CONSISTENCY_DATETIME]\nFROM OPENJSON(@Modules) arr\nCROSS APPLY OPENJSON(arr.[value])\nWITH\n(\n   [BATCH_CODE]                     VARCHAR(500)\n  ,[MODULE_INSTANCE_ID]             BIGINT\n  ,[MODULE_CODE]                    VARCHAR(500)\n  ,[EXECUTABLE]                     VARCHAR(8000)\n  ,[DATA_OBJECT_SOURCE]             VARCHAR(1000)\n  ,[DATA_OBJECT_TARGET]             VARCHAR(1000)\n  ,[PREVIOUS_END_VALUE]             VARCHAR(100)\n  ,[INTERNAL_PROCESSING_STATUS_CODE] VARCHAR(100)\n  ,[ROLLBACK_STATEMENT]             VARCHAR(8000)\n  ,[CONSISTENCY_DATETIME]           VARCHAR(100)\n) r\nWHERE r.[INTERNAL_PROCESSING_STATUS_CODE] = 'Proceed';\n\nCREATE TABLE #results\n(\n   [Seq]              INT\n  ,[BatchCode]        VARCHAR(500)\n  ,[ModuleInstanceId] BIGINT\n  ,[ModuleCode]       VARCHAR(500)\n  ,[EventCode]        VARCHAR(100)\n  ,[StartValue]       VARCHAR(100)\n  ,[EndValue]         VARCHAR(100)\n  ,[RowCountInsert]   BIGINT\n  ,[RowCountDeleted]  BIGINT\n  ,[EventDetail]      VARCHAR(4000)\n  ,[DurationMs]       INT\n);\n\nDECLARE @i INT = 0;\nDECLARE @n INT = (SELECT COUNT(*) FROM #modules);\nDECLARE @WindowColumn VARCHAR(128) = COALESCE(NULLIF(TRIM(@LoadWindowAttributeName), ''), 'INSCRIPTION_TIMESTAMP');\nDECLARE @ParameterDefinition NVARCHAR(500) = N'@ModuleInstanceId BIGINT, @StartValue VARCHAR(100), @EndValue VARCHAR(100), @ConsistencyDateTime VARCHAR(100)';\n\nDECLARE @ModuleInstanceId BIGINT, @BatchCode VARCHAR(500), @ModuleCode VARCHAR(500), @Executable NVARCHAR(MAX), @Source VARCHAR(1000), @Target VARCHAR(1000);\nDECLARE @StartValue VARCHAR(100), @EndValue VARCHAR(100), @Rollback NVARCHAR(MAX), @ConsistencyDateTime VARCHAR(100);\nDECLARE @Sql NVARCHAR(MAX), @Before BIGINT, @After BIGINT, @T0 DATETIME2(6), @Step VARCHAR(50);\nDECLARE @WindowKnown BIT, @RowCountInsert BIGINT, @RowCountDeleted BIGINT;\n\nWHILE @i < @n\nBEGIN\n  SET @i = @i + 1;\n\n  SELECT\n     @ModuleInstanceId = [MODULE_INSTANCE_ID], @BatchCode = [BATCH_CODE], @ModuleCode = [MODULE_CODE], @Executable = [EXECUTABLE]\n    ,@Source = [DATA_OBJECT_SOURCE], @Target = [DATA_OBJECT_TARGET], @StartValue = [PREVIOUS_END_VALUE]\n    ,@Rollback = [ROLLBACK_STATEMENT], @ConsistencyDateTime = [CONSISTENCY_DATETIME]\n  FROM #modules\n  WHERE [SEQ] = @i;\n\n  SET @T0 = SYSDATETIME();\n  SET @EndValue = NULL;\n  SET @Before = NULL;\n  SET @After = NULL;\n  SET @Step = 'rollback';\n\n  BEGIN TRY\n    -- Rollback of earlier failed instances, decided by the Module evaluation in the repository\n    IF @Rollback IS NOT NULL AND TRIM(@Rollback) <> ''\n    BEGIN\n      EXEC sp_executesql @Rollback;\n    END;\n\n    -- Load window end: the latest load window attribute value in the source data object.\n    -- An empty source keeps the window closed at its start value, so that the recorded end does not run ahead of the data.\n    -- When the source has no such attribute (for example an operational source), the current time is used.\n    SET @Step = 'load window';\n    SET @WindowKnown = 0;\n    IF @Source IS NOT NULL AND TRIM(@Source) <> ''\n    BEGIN\n      BEGIN TRY\n        SET @Sql = N'SELECT @e = CONVERT(VARCHAR(27), MAX(' + QUOTENAME(@WindowColumn) + N'), 121) FROM ' + @Source;\n        EXEC sp_executesql @Sql, N'@e VARCHAR(27) OUTPUT', @e = @EndValue OUTPUT;\n        SET @WindowKnown = 1;\n      END TRY\n      BEGIN CATCH\n        SET @EndValue = NULL;\n      END CATCH;\n    END;\n    IF @EndValue IS NULL SET @EndValue = CASE WHEN @WindowKnown = 1 THEN @StartValue ELSE CONVERT(VARCHAR(27), SYSDATETIME(), 121) END;\n\n    -- Target row count before\n    SET @Step = 'row count';\n    IF @Target IS NOT NULL AND TRIM(@Target) <> ''\n    BEGIN\n      BEGIN TRY\n        SET @Sql = N'SELECT @c = COUNT_BIG(*) FROM ' + @Target;\n        EXEC sp_executesql @Sql, N'@c BIGINT OUTPUT', @c = @Before OUTPUT;\n      END TRY\n      BEGIN CATCH\n        SET @Before = NULL;\n      END CATCH;\n    END;\n\n    -- The executable\n    SET @Step = 'executable';\n    EXEC sp_executesql @Executable, @ParameterDefinition\n      ,@ModuleInstanceId = @ModuleInstanceId, @StartValue = @StartValue, @EndValue = @EndValue, @ConsistencyDateTime = @ConsistencyDateTime;\n\n    -- Target row count after\n    SET @Step = 'row count';\n    IF @Before IS NOT NULL\n    BEGIN\n      BEGIN TRY\n        SET @Sql = N'SELECT @c = COUNT_BIG(*) FROM ' + @Target;\n        EXEC sp_executesql @Sql, N'@c BIGINT OUTPUT', @c = @After OUTPUT;\n      END TRY\n      BEGIN CATCH\n        SET @After = NULL;\n      END CATCH;\n    END;\n\n    -- Row counts from the target counts: a target that holds fewer rows than before was reset and reloaded\n    -- (for example a truncate-and-load Landing table), so its old rows count as deleted and the new rows as inserted.\n    SET @RowCountInsert = CASE WHEN @After >= @Before THEN @After - @Before ELSE @After END;\n    SET @RowCountDeleted = CASE WHEN @After < @Before THEN @Before ELSE 0 END;\n\n    INSERT INTO #results VALUES (@i, @BatchCode, @ModuleInstanceId, @ModuleCode, 'Success', @StartValue, @EndValue, @RowCountInsert, @RowCountDeleted, NULL, DATEDIFF(MILLISECOND, @T0, SYSDATETIME()));\n  END TRY\n  BEGIN CATCH\n    INSERT INTO #results VALUES (@i, @BatchCode, @ModuleInstanceId, @ModuleCode, 'Failure', @StartValue, @EndValue, NULL, NULL,\n      LEFT('Error in ' + @Step + ' (' + CONVERT(VARCHAR(20), ERROR_NUMBER()) + '): ' + ERROR_MESSAGE(), 4000), DATEDIFF(MILLISECOND, @T0, SYSDATETIME()));\n  END CATCH;\nEND;\n\nSELECT [Seq], [BatchCode], [ModuleInstanceId], [ModuleCode], [EventCode], [StartValue], [EndValue], [RowCountInsert], [RowCountDeleted], [EventDetail], [DurationMs]\nFROM #results\nORDER BY [Seq];",
+                "type": "Expression"
+              },
+              "parameters": [
+                {
+                  "name": "Modules",
+                  "type": "String",
+                  "size": "-1",
+                  "direction": "Input",
+                  "value": {
+                    "value": "@string(activity('Open Module').output.resultSets[0].rows[0].MODULES)",
+                    "type": "Expression"
+                  }
+                },
+                {
+                  "name": "LoadWindowAttributeName",
+                  "type": "String",
+                  "size": "128",
+                  "direction": "Input",
+                  "value": {
+                    "value": "@pipeline().libraryVariables.LoadWindowAttributeName",
+                    "type": "Expression"
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "description": "Runs the rollback statements and executables of the Modules on the Warehouse, in sequence, and collects the outcome per Module Instance."
+      },
+      {
+        "name": "Close Module",
+        "type": "Script",
+        "dependsOn": [
+          {
+            "activity": "Run Modules",
+            "dependencyConditions": [
+              "Succeeded"
+            ]
+          }
+        ],
+        "policy": {
+          "timeout": "0.02:00:00",
+          "retry": 0,
+          "retryIntervalInSeconds": 30,
+          "secureOutput": false,
+          "secureInput": false
+        },
+        "connectionSettings": {
+          "name": "DIRECT repository",
+          "properties": {
+            "annotations": [],
+            "type": "FabricSqlDatabase",
+            "typeProperties": {
+              "workspaceId": {
+                "value": "@pipeline().libraryVariables.WorkspaceId",
+                "type": "Expression"
+              },
+              "artifactId": {
+                "value": "@pipeline().libraryVariables.RepositoryDatabaseItemId",
+                "type": "Expression"
+              }
+            },
+            "externalReferences": {
+              "connection": {
+                "value": "@pipeline().libraryVariables.RepositoryConnectionId",
+                "type": "Expression"
+              }
+            }
+          }
+        },
+        "typeProperties": {
+          "scriptBlockExecutionTimeout": "02:00:00",
+          "scripts": [
+            {
+              "type": "Query",
+              "text": {
+                "value": "-- DIRECT Run Module, activity 'Close Module' (repository database).\n-- Records the load window and the outcome of the Module Instance from the result row of 'Run Modules'.\n-- Fails the activity (after the bookkeeping) when the Module failed.\n-- Parameters: @ModuleInstanceId (string), @InternalProcessingStatusCode, @ModuleResults (string, JSON array with one row).\nSET NOCOUNT ON;\n\nDECLARE @Id BIGINT = TRY_CONVERT(BIGINT, NULLIF(TRIM(@ModuleInstanceId), N''));\nDECLARE @EventCode NVARCHAR(100), @StartValue NVARCHAR(100), @EndValue NVARCHAR(100), @RowCountInsert BIGINT, @RowCountDeleted BIGINT, @EventDetail NVARCHAR(4000);\nDECLARE @SuccessIndicator CHAR(1) = 'N';\nDECLARE @MessageLog NVARCHAR(MAX);\nDECLARE @ErrorMessage NVARCHAR(2048);\n\nIF @Id IS NULL OR @InternalProcessingStatusCode <> N'Proceed'\nBEGIN\n  -- The Module Instance was closed by its evaluation (Cancel or Abort); nothing to report.\n  SELECT @Id AS MODULE_INSTANCE_ID, @InternalProcessingStatusCode AS INTERNAL_PROCESSING_STATUS_CODE, NULL AS EVENT_CODE;\n  RETURN;\nEND;\n\nSELECT TOP 1\n   @EventCode      = COALESCE(NULLIF(TRIM([EventCode]), N''), N'Failure')\n  ,@StartValue     = NULLIF(TRIM([StartValue]), N'')\n  ,@EndValue       = NULLIF(TRIM([EndValue]), N'')\n  ,@RowCountInsert = COALESCE([RowCountInsert], 0)\n  ,@RowCountDeleted = COALESCE([RowCountDeleted], 0)\n  ,@EventDetail    = [EventDetail]\nFROM OPENJSON(NULLIF(TRIM(@ModuleResults), N''))\nWITH\n(\n   [ModuleInstanceId] BIGINT\n  ,[EventCode]        NVARCHAR(100)\n  ,[StartValue]       NVARCHAR(100)\n  ,[EndValue]         NVARCHAR(100)\n  ,[RowCountInsert]   BIGINT\n  ,[RowCountDeleted]  BIGINT\n  ,[EventDetail]      NVARCHAR(4000)\n)\nWHERE [ModuleInstanceId] = @Id;\n\nIF @EventCode IS NULL\nBEGIN\n  SET @EventCode = N'Failure';\n  SET @EventDetail = N'The orchestrator did not report a result for the Module Instance.';\nEND;\n\nIF @StartValue IS NOT NULL\nBEGIN\n  EXEC [omd].[SetSourceControlValues] @ModuleInstanceId = @Id, @StartValue = @StartValue, @EndValue = @EndValue;\nEND;\n\nIF @EventCode = N'Failure' AND @EventDetail IS NOT NULL\nBEGIN\n  EXEC [omd].[InsertIntoEventLog] @ModuleInstanceId = @Id, @EventDetail = @EventDetail;\nEND;\n\nEXEC [omd].[UpdateModuleInstance]\n   @ModuleInstanceId  = @Id\n  ,@EventCode         = @EventCode\n  ,@RowCountInsert    = @RowCountInsert\n  ,@RowCountDeleted   = COALESCE(@RowCountDeleted, 0)\n  ,@SuccessIndicator  = @SuccessIndicator OUTPUT\n  ,@MessageLog        = @MessageLog OUTPUT;\n\nSELECT @Id AS MODULE_INSTANCE_ID, @InternalProcessingStatusCode AS INTERNAL_PROCESSING_STATUS_CODE, @EventCode AS EVENT_CODE;\n\nIF @SuccessIndicator <> 'Y'\nBEGIN\n  SET @ErrorMessage = LEFT(N'DIRECT could not close Module Instance ' + CONVERT(NVARCHAR(20), @Id) + N': ' + COALESCE(@MessageLog, N''), 2048);\n  THROW 50000, @ErrorMessage, 1;\nEND;\n\nIF @EventCode = N'Failure'\nBEGIN\n  SET @ErrorMessage = LEFT(N'Module Instance ' + CONVERT(NVARCHAR(20), @Id) + N' failed: ' + COALESCE(@EventDetail, N'no detail'), 2048);\n  THROW 50000, @ErrorMessage, 1;\nEND;",
+                "type": "Expression"
+              },
+              "parameters": [
+                {
+                  "name": "ModuleInstanceId",
+                  "type": "String",
+                  "size": "100",
+                  "direction": "Input",
+                  "value": {
+                    "value": "@string(activity('Open Module').output.resultSets[0].rows[0].MODULE_INSTANCE_ID)",
+                    "type": "Expression"
+                  }
+                },
+                {
+                  "name": "InternalProcessingStatusCode",
+                  "type": "String",
+                  "size": "100",
+                  "direction": "Input",
+                  "value": {
+                    "value": "@string(activity('Open Module').output.resultSets[0].rows[0].INTERNAL_PROCESSING_STATUS_CODE)",
+                    "type": "Expression"
+                  }
+                },
+                {
+                  "name": "ModuleResults",
+                  "type": "String",
+                  "size": "-1",
+                  "direction": "Input",
+                  "value": {
+                    "value": "@string(activity('Run Modules').output.resultSets[0].rows)",
+                    "type": "Expression"
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "description": "Records the load window and the outcome of the Module Instance."
+      },
+      {
+        "name": "Fail Module",
+        "type": "Script",
+        "dependsOn": [
+          {
+            "activity": "Run Modules",
+            "dependencyConditions": [
+              "Failed"
+            ]
+          }
+        ],
+        "policy": {
+          "timeout": "0.02:00:00",
+          "retry": 0,
+          "retryIntervalInSeconds": 30,
+          "secureOutput": false,
+          "secureInput": false
+        },
+        "connectionSettings": {
+          "name": "DIRECT repository",
+          "properties": {
+            "annotations": [],
+            "type": "FabricSqlDatabase",
+            "typeProperties": {
+              "workspaceId": {
+                "value": "@pipeline().libraryVariables.WorkspaceId",
+                "type": "Expression"
+              },
+              "artifactId": {
+                "value": "@pipeline().libraryVariables.RepositoryDatabaseItemId",
+                "type": "Expression"
+              }
+            },
+            "externalReferences": {
+              "connection": {
+                "value": "@pipeline().libraryVariables.RepositoryConnectionId",
+                "type": "Expression"
+              }
+            }
+          }
+        },
+        "typeProperties": {
+          "scriptBlockExecutionTimeout": "02:00:00",
+          "scripts": [
+            {
+              "type": "Query",
+              "text": {
+                "value": "-- DIRECT Run Module, activity 'Fail Module' (repository database). Runs when 'Run Modules' itself failed.\n-- Fails the Module Instance, logs the error, then fails when @RaiseError = 'Y'.\n-- Parameters: @ModuleInstanceId (string), @InternalProcessingStatusCode, @ErrorMessage (string), @RaiseError (string, 'Y' or 'N').\nSET NOCOUNT ON;\n\nDECLARE @Id BIGINT = TRY_CONVERT(BIGINT, NULLIF(TRIM(@ModuleInstanceId), N''));\nDECLARE @Detail NVARCHAR(4000) = LEFT(N'The orchestrator failed to run the Module: ' + COALESCE(@ErrorMessage, N'no error message'), 4000);\nDECLARE @Message NVARCHAR(2048) = LEFT(@Detail, 2048);\n\nIF @Id IS NOT NULL AND @InternalProcessingStatusCode = N'Proceed'\nBEGIN\n  EXEC [omd].[InsertIntoEventLog] @ModuleInstanceId = @Id, @EventDetail = @Detail;\n  EXEC [omd].[UpdateModuleInstance] @ModuleInstanceId = @Id, @EventCode = N'Failure';\nEND;\n\nIF UPPER(COALESCE(@RaiseError, N'Y')) = N'Y' THROW 50000, @Message, 1;\n\nSELECT @Id AS INSTANCE_ID, N'Failure' AS EVENT_CODE;",
+                "type": "Expression"
+              },
+              "parameters": [
+                {
+                  "name": "ModuleInstanceId",
+                  "type": "String",
+                  "size": "100",
+                  "direction": "Input",
+                  "value": {
+                    "value": "@string(activity('Open Module').output.resultSets[0].rows[0].MODULE_INSTANCE_ID)",
+                    "type": "Expression"
+                  }
+                },
+                {
+                  "name": "InternalProcessingStatusCode",
+                  "type": "String",
+                  "size": "100",
+                  "direction": "Input",
+                  "value": {
+                    "value": "@string(activity('Open Module').output.resultSets[0].rows[0].INTERNAL_PROCESSING_STATUS_CODE)",
+                    "type": "Expression"
+                  }
+                },
+                {
+                  "name": "ErrorMessage",
+                  "type": "String",
+                  "size": "4000",
+                  "direction": "Input",
+                  "value": {
+                    "value": "@string(activity('Run Modules').error.message)",
+                    "type": "Expression"
+                  }
+                },
+                {
+                  "name": "RaiseError",
+                  "type": "String",
+                  "size": "1",
+                  "direction": "Input",
+                  "value": {
+                    "value": "@string('Y')",
+                    "type": "Expression"
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "description": "Closes the Module Instance as Failure when the executable could not be run."
+      }
+    ],
+    "annotations": [
+      "DIRECT"
+    ]
+  }
+}

@@ -2,7 +2,7 @@
 https://github.com/data-solution-automation-engine/DIRECT
 Reference data insert and update script
 
-DIRECT Framework v2.1.0
+DIRECT Framework v2.2.0
 
 Reference metadata table FRAMEWORK_METADATA stores metadata information.
 This script is used to insert and update reference data on deployment.
@@ -27,7 +27,7 @@ DECLARE @tblMerge TABLE(
 
 INSERT INTO @tblMerge([CODE], [VALUE], [GROUP], [DESCRIPTION], [ACTIVE_INDICATOR])
 VALUES
-   (N'DIRECT_VERSION', N'2.1.0', N'SYSTEM_METADATA',
+   (N'DIRECT_VERSION', N'2.2.0', N'SYSTEM_METADATA',
       N'The current version of the DIRECT Framework and database', 'Y')
 
   ,(N'LOG_TO_EVENT_LOG', N'Y', N'SETTINGS',
