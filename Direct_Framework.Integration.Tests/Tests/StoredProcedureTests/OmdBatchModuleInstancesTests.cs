@@ -12,6 +12,9 @@ public class OmdBatchModuleInstancesTests : BaseTestContainer
   private const string FirstModuleCode = "M_INGESTION_EXAMPLE";
   private const string SecondModuleCode = "M_INGESTION_EXAMPLE_2";
   private const string ChildBatchCode = "b_INGESTION_EXAMPLE_CHILD";
+  private const string ChildModuleCode = "M_INGESTION_EXAMPLE_CHILD";
+  private const string GrandchildBatchCode = "b_INGESTION_EXAMPLE_GRANDCHILD";
+  private const string GrandchildModuleCode = "M_INGESTION_EXAMPLE_GRANDCHILD";
 
   [TestInitialize]
   public async Task TestInitialize()
@@ -29,7 +32,7 @@ public class OmdBatchModuleInstancesTests : BaseTestContainer
 
   /// <summary>
   /// Adds a second Module and links both Modules to the example Batch, the second one first by sequence.
-  /// Also adds a child Batch under the example Batch.
+  /// Also adds a child Batch with one Module under the example Batch, and a grandchild Batch with one Module under the child.
   /// </summary>
   private async Task ArrangeBatchWithTwoModulesAsync()
   {
@@ -49,8 +52,30 @@ public class OmdBatchModuleInstancesTests : BaseTestContainer
       INSERT INTO omd.BATCH_HIERARCHY (PARENT_BATCH_ID, BATCH_ID, [SEQUENCE], ACTIVE_INDICATOR)
       SELECT p.BATCH_ID, c.BATCH_ID, 1, 'Y'
       FROM omd.BATCH p JOIN omd.BATCH c ON c.BATCH_CODE = @ChildBatchCode
-      WHERE p.BATCH_CODE = @BatchCode;",
-      new { BatchCode, FirstModuleCode, SecondModuleCode, ChildBatchCode });
+      WHERE p.BATCH_CODE = @BatchCode;
+
+      INSERT INTO omd.MODULE (MODULE_CODE, MODULE_TYPE, DATA_OBJECT_SOURCE, DATA_OBJECT_TARGET, AREA_CODE, FREQUENCY_CODE, MODULE_DESCRIPTION, ACTIVE_INDICATOR, EXECUTABLE)
+      VALUES (@ChildModuleCode, N'Ingestion', N'SourceObject3', N'TargetObject3', N'STG', N'On-demand', N'Child batch module', 'Y', N'SELECT 3'),
+             (@GrandchildModuleCode, N'Ingestion', N'SourceObject4', N'TargetObject4', N'STG', N'On-demand', N'Grandchild batch module', 'Y', N'SELECT 4');
+
+      INSERT INTO omd.BATCH_MODULE (BATCH_ID, MODULE_ID, [SEQUENCE], ACTIVE_INDICATOR)
+      SELECT b.BATCH_ID, m.MODULE_ID, 10, 'Y'
+      FROM omd.BATCH b JOIN omd.MODULE m ON m.MODULE_CODE = @ChildModuleCode
+      WHERE b.BATCH_CODE = @ChildBatchCode;
+
+      INSERT INTO omd.BATCH (BATCH_CODE, BATCH_TYPE, FREQUENCY_CODE, ACTIVE_INDICATOR, BATCH_DESCRIPTION)
+      VALUES (@GrandchildBatchCode, N'Ingestion', N'On-demand', 'Y', N'Grandchild batch');
+
+      INSERT INTO omd.BATCH_HIERARCHY (PARENT_BATCH_ID, BATCH_ID, [SEQUENCE], ACTIVE_INDICATOR)
+      SELECT p.BATCH_ID, c.BATCH_ID, 1, 'Y'
+      FROM omd.BATCH p JOIN omd.BATCH c ON c.BATCH_CODE = @GrandchildBatchCode
+      WHERE p.BATCH_CODE = @ChildBatchCode;
+
+      INSERT INTO omd.BATCH_MODULE (BATCH_ID, MODULE_ID, [SEQUENCE], ACTIVE_INDICATOR)
+      SELECT b.BATCH_ID, m.MODULE_ID, 10, 'Y'
+      FROM omd.BATCH b JOIN omd.MODULE m ON m.MODULE_CODE = @GrandchildModuleCode
+      WHERE b.BATCH_CODE = @GrandchildBatchCode;",
+      new { BatchCode, FirstModuleCode, SecondModuleCode, ChildBatchCode, ChildModuleCode, GrandchildBatchCode, GrandchildModuleCode });
   }
 
   private static DynamicParameters CreateParameters(string? batchCode, string? consistencyModuleTypeList = null)
@@ -83,6 +108,26 @@ public class OmdBatchModuleInstancesTests : BaseTestContainer
     parameters.Add("@ReturnCode", dbType: System.Data.DbType.Int32, direction: System.Data.ParameterDirection.ReturnValue);
     return parameters;
   }
+
+  private async Task<(List<dynamic> Rows, DynamicParameters Parameters)> CreateWithChildrenAsync(SqlConnection conn, string? batchCode)
+  {
+    var parameters = CreateParameters(batchCode);
+    parameters.Add("@IncludeChildBatches", "Y");
+    parameters.Add("@BatchInstancesJson", dbType: System.Data.DbType.String, direction: System.Data.ParameterDirection.Output, size: -1);
+    var rows = (await conn.QueryAsync("[omd].[CreateBatchModuleInstances]", parameters, commandType: System.Data.CommandType.StoredProcedure)).ToList();
+    return (rows, parameters);
+  }
+
+  private static DynamicParameters EndWithChildrenParameters(long batchInstanceId, string? moduleResults)
+  {
+    var parameters = EndParameters(batchInstanceId, moduleResults);
+    parameters.Add("@IncludeChildBatches", "Y");
+    parameters.Add("@FailedBatchCount", dbType: System.Data.DbType.Int32, direction: System.Data.ParameterDirection.Output);
+    return parameters;
+  }
+
+  private static string SuccessResults(IEnumerable<dynamic> rows) =>
+    "[" + string.Join(",", rows.Select(r => $@"{{ ""ModuleInstanceId"": {(long)r.MODULE_INSTANCE_ID}, ""EventCode"": ""Success"", ""StartValue"": ""{(string)r.PREVIOUS_END_VALUE}"", ""EndValue"": ""2026-10-26 10:00:00.0000000"" }}")) + "]";
 
   private async Task<(List<dynamic> Rows, DynamicParameters Parameters)> CreateAsync(SqlConnection conn, string? batchCode, string? consistencyModuleTypeList = null)
   {
@@ -347,6 +392,128 @@ public class OmdBatchModuleInstancesTests : BaseTestContainer
     Assert.HasCount(2, thirdRows);
     Assert.IsTrue(thirdRows.Any(r => r.ROLLBACK_STATEMENT != null && !((string)r.ROLLBACK_STATEMENT).Contains("((")),
       "The rollback statement for the failed Module has a single pair of parentheses around the id list.");
+  }
+
+  [TestMethod]
+  public async Task CreateBatchModuleInstances_OpensChildBatchesInRunOrder_WhenIncluded()
+  {
+    using var conn = new SqlConnection(ContainerManager.DirectConnectionString);
+
+    var (rows, parameters) = await CreateWithChildrenAsync(conn, BatchCode);
+    var messageLog = parameters.Get<string?>("@MessageLog");
+
+    Assert.AreEqual(0, parameters.Get<int>("@ReturnCode"), $"MessageLog: {messageLog}");
+    Assert.AreEqual("Proceed", parameters.Get<string?>("@InternalProcessingStatusCode"));
+    var rootInstanceId = parameters.Get<long>("@BatchInstanceId");
+
+    // The Modules of the Batch first, then those of the child, then those of the grandchild
+    Assert.HasCount(4, rows, "Two root Modules, one child Module and one grandchild Module are expected.");
+    Assert.AreEqual(SecondModuleCode, (string)rows[0].MODULE_CODE);
+    Assert.AreEqual(FirstModuleCode, (string)rows[1].MODULE_CODE);
+    Assert.AreEqual(ChildModuleCode, (string)rows[2].MODULE_CODE);
+    Assert.AreEqual(GrandchildModuleCode, (string)rows[3].MODULE_CODE);
+    Assert.AreEqual(BatchCode, (string)rows[0].BATCH_CODE);
+    Assert.AreEqual(ChildBatchCode, (string)rows[2].BATCH_CODE);
+    Assert.AreEqual(GrandchildBatchCode, (string)rows[3].BATCH_CODE);
+    Assert.IsTrue(rows.All(r => (string)r.INTERNAL_PROCESSING_STATUS_CODE == "Proceed"));
+
+    var batches = System.Text.Json.JsonDocument.Parse(parameters.Get<string>("@BatchInstancesJson")).RootElement;
+    Assert.AreEqual(3, batches.GetArrayLength(), "One Batch Instance per Batch in the hierarchy.");
+    Assert.AreEqual(BatchCode, batches[0].GetProperty("BATCH_CODE").GetString());
+    Assert.AreEqual(0, batches[0].GetProperty("LEVEL").GetInt32());
+    Assert.AreEqual(2, batches[0].GetProperty("MODULE_COUNT").GetInt32());
+    Assert.AreEqual(ChildBatchCode, batches[1].GetProperty("BATCH_CODE").GetString());
+    Assert.AreEqual(1, batches[1].GetProperty("LEVEL").GetInt32());
+    Assert.AreEqual(rootInstanceId, batches[1].GetProperty("PARENT_BATCH_INSTANCE_ID").GetInt64());
+    Assert.AreEqual(GrandchildBatchCode, batches[2].GetProperty("BATCH_CODE").GetString());
+    Assert.AreEqual(2, batches[2].GetProperty("LEVEL").GetInt32());
+    Assert.AreEqual(batches[1].GetProperty("BATCH_INSTANCE_ID").GetInt64(), batches[2].GetProperty("PARENT_BATCH_INSTANCE_ID").GetInt64());
+    Assert.AreEqual((long)rows[2].BATCH_INSTANCE_ID, batches[1].GetProperty("BATCH_INSTANCE_ID").GetInt64());
+
+    var executingBatches = await conn.ExecuteScalarAsync<int>(
+      "SELECT COUNT(*) FROM omd.BATCH_INSTANCE WHERE EXECUTION_STATUS_CODE = 'Executing' AND BATCH_INSTANCE_ID IN (@A, @B, @C)",
+      new { A = rootInstanceId, B = batches[1].GetProperty("BATCH_INSTANCE_ID").GetInt64(), C = batches[2].GetProperty("BATCH_INSTANCE_ID").GetInt64() });
+    Assert.AreEqual(3, executingBatches, "All Batch Instances stay executing until the orchestrator reports.");
+  }
+
+  [TestMethod]
+  public async Task EndBatchModuleInstances_ClosesChildBatches_OnSuccess()
+  {
+    using var conn = new SqlConnection(ContainerManager.DirectConnectionString);
+    var (rows, create) = await CreateWithChildrenAsync(conn, BatchCode);
+    var rootInstanceId = create.Get<long>("@BatchInstanceId");
+
+    var parameters = EndWithChildrenParameters(rootInstanceId, SuccessResults(rows));
+    await conn.ExecuteAsync("[omd].[EndBatchModuleInstances]", parameters, commandType: System.Data.CommandType.StoredProcedure);
+    var messageLog = parameters.Get<string?>("@MessageLog");
+
+    Assert.AreEqual(0, parameters.Get<int>("@ReturnCode"), $"MessageLog: {messageLog}");
+    Assert.AreEqual(4, parameters.Get<int?>("@ReportedCount"));
+    Assert.AreEqual(0, parameters.Get<int?>("@FailedCount"));
+    Assert.AreEqual(0, parameters.Get<int?>("@FailedBatchCount"));
+    Assert.AreEqual("Succeeded", parameters.Get<string?>("@ExecutionStatusCode"));
+
+    var batchStatuses = (await conn.QueryAsync<string>(
+      "SELECT EXECUTION_STATUS_CODE FROM omd.BATCH_INSTANCE WHERE BATCH_INSTANCE_ID IN (SELECT DISTINCT BATCH_INSTANCE_ID FROM omd.MODULE_INSTANCE WHERE MODULE_INSTANCE_ID IN (@A, @B))",
+      new { A = (long)rows[2].MODULE_INSTANCE_ID, B = (long)rows[3].MODULE_INSTANCE_ID })).ToList();
+    Assert.HasCount(2, batchStatuses);
+    Assert.IsTrue(batchStatuses.All(s => s == "Succeeded"), "The child and grandchild Batch Instances are closed as well.");
+
+    // The next run starts from the recorded load windows, in the child Batches too
+    var (nextRows, next) = await CreateWithChildrenAsync(conn, BatchCode);
+    Assert.AreEqual("Proceed", next.Get<string?>("@InternalProcessingStatusCode"), next.Get<string?>("@MessageLog"));
+    Assert.HasCount(4, nextRows);
+    Assert.IsTrue(nextRows.All(r => (string)r.PREVIOUS_END_VALUE == "2026-10-26 10:00:00.0000000"), "The previous end value comes from the recorded load window.");
+  }
+
+  [TestMethod]
+  public async Task EndBatchModuleInstances_FailsParentBatches_WhenGrandchildModuleFails()
+  {
+    using var conn = new SqlConnection(ContainerManager.DirectConnectionString);
+    var (rows, create) = await CreateWithChildrenAsync(conn, BatchCode);
+    var rootInstanceId = create.Get<long>("@BatchInstanceId");
+
+    var results = SuccessResults(rows.Take(3)).TrimEnd(']')
+      + $@", {{ ""ModuleInstanceId"": {(long)rows[3].MODULE_INSTANCE_ID}, ""EventCode"": ""Failure"", ""EventDetail"": ""Grandchild failed"" }} ]";
+
+    var parameters = EndWithChildrenParameters(rootInstanceId, results);
+    await conn.ExecuteAsync("[omd].[EndBatchModuleInstances]", parameters, commandType: System.Data.CommandType.StoredProcedure);
+    var messageLog = parameters.Get<string?>("@MessageLog");
+
+    Assert.AreEqual(0, parameters.Get<int>("@ReturnCode"), $"The bookkeeping itself succeeds. MessageLog: {messageLog}");
+    Assert.AreEqual(1, parameters.Get<int?>("@FailedCount"));
+    Assert.AreEqual(2, parameters.Get<int?>("@FailedBatchCount"), "The grandchild and the child Batch Instances fail.");
+    Assert.AreEqual("Failed", parameters.Get<string?>("@ExecutionStatusCode"), "The failure travels up to the Batch Instance itself.");
+
+    var rootModuleStatuses = (await conn.QueryAsync<string>(
+      "SELECT EXECUTION_STATUS_CODE FROM omd.MODULE_INSTANCE WHERE MODULE_INSTANCE_ID IN (@A, @B)", new { A = (long)rows[0].MODULE_INSTANCE_ID, B = (long)rows[1].MODULE_INSTANCE_ID })).ToList();
+    Assert.IsTrue(rootModuleStatuses.All(s => s == "Succeeded"), "The Modules that succeeded keep their outcome.");
+  }
+
+  [TestMethod]
+  public async Task CreateBatchModuleInstances_SkipsAbortedChildBatch_AndParentSucceeds()
+  {
+    using var conn = new SqlConnection(ContainerManager.DirectConnectionString);
+
+    // A child Batch Instance that is still executing makes the child abort when it is opened as part of the parent
+    var (_, childAlone) = await CreateAsync(conn, ChildBatchCode);
+    Assert.AreEqual("Proceed", childAlone.Get<string?>("@InternalProcessingStatusCode"));
+
+    var (rows, create) = await CreateWithChildrenAsync(conn, BatchCode);
+    Assert.AreEqual(0, create.Get<int>("@ReturnCode"), create.Get<string?>("@MessageLog"));
+    Assert.AreEqual("Proceed", create.Get<string?>("@InternalProcessingStatusCode"));
+    Assert.HasCount(2, rows, "Only the Modules of the Batch itself are opened; the aborted child and its grandchild are skipped.");
+
+    var batches = System.Text.Json.JsonDocument.Parse(create.Get<string>("@BatchInstancesJson")).RootElement;
+    Assert.AreEqual(2, batches.GetArrayLength(), "The Batch and the aborted child Batch Instance; the grandchild is not opened.");
+    Assert.AreEqual("Abort", batches[1].GetProperty("INTERNAL_PROCESSING_STATUS_CODE").GetString());
+    Assert.AreEqual(0, batches[1].GetProperty("MODULE_COUNT").GetInt32());
+
+    var parameters = EndWithChildrenParameters(create.Get<long>("@BatchInstanceId"), SuccessResults(rows));
+    await conn.ExecuteAsync("[omd].[EndBatchModuleInstances]", parameters, commandType: System.Data.CommandType.StoredProcedure);
+    Assert.AreEqual(0, parameters.Get<int>("@ReturnCode"), parameters.Get<string?>("@MessageLog"));
+    Assert.AreEqual("Succeeded", parameters.Get<string?>("@ExecutionStatusCode"), "An aborted child does not fail the parent, as in omd.RunBatch.");
+    Assert.AreEqual(0, parameters.Get<int?>("@FailedBatchCount"));
   }
 }
 

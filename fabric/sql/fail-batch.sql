@@ -1,5 +1,5 @@
 -- DIRECT Run Batch, activity 'Fail Batch' (repository database). Runs when 'Run Modules' itself failed.
--- Fails all open Module Instances of the Batch Instance, closes the Batch Instance as Failure, logs the error, then fails when @RaiseError = 'Y'.
+-- Fails all open Module Instances of the Batch Instance and its child Batch Instances, closes them as Failure, logs the error, then fails when @RaiseError = 'Y'.
 -- Parameters: @BatchInstanceId (string), @InternalProcessingStatusCode, @ErrorMessage (string), @RaiseError (string, 'Y' or 'N').
 SET NOCOUNT ON;
 
@@ -10,7 +10,7 @@ DECLARE @Message NVARCHAR(2048) = LEFT(@Detail, 2048);
 IF @Id IS NOT NULL AND @InternalProcessingStatusCode = N'Proceed'
 BEGIN
   EXEC [omd].[InsertIntoEventLog] @ModuleInstanceId = 0, @BatchInstanceId = @Id, @EventDetail = @Detail;
-  EXEC [omd].[EndBatchModuleInstances] @BatchInstanceId = @Id, @ModuleResults = NULL, @BatchEventCode = N'Failure';
+  EXEC [omd].[EndBatchModuleInstances] @BatchInstanceId = @Id, @ModuleResults = NULL, @BatchEventCode = N'Failure', @IncludeChildBatches = 'Y';
 END;
 
 IF UPPER(COALESCE(@RaiseError, N'Y')) = N'Y' THROW 50000, @Message, 1;

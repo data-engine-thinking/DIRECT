@@ -44,10 +44,18 @@
  * @param {CHAR(1)}        @ReturnResultSet               [in]  (optional, default='Y')
  *   'N' suppresses the result set; the rows are then only available through @ResultJson. Callers that cannot
  *   consume a result set next to output parameters (for example a pipeline Script activity) use this.
+ * @param {CHAR(1)}        @IncludeChildBatches           [in]  (optional, default='N')
+ *   'Y' also opens the active child Batches of the Batch (omd.BATCH_HIERARCHY), recursively and in sequence,
+ *   after the Modules of the Batch itself, with the Batch Instance as parent. The rows of all Batches are
+ *   returned in run order: the Modules of a Batch first, then those of its child Batches. A child Batch that
+ *   evaluates to 'Abort' or 'Cancel' is skipped with its own children. This mirrors omd.RunBatch.
  * @param {CHAR(1)}        @Debug                         [in]  (optional, default='N')
  *   Enables debug logging.
  * @param {NVARCHAR(MAX)}  @ResultJson                    [out] (optional)
  *   The result set as a JSON array (FOR JSON PATH), '[]' when there are no rows.
+ * @param {NVARCHAR(MAX)}  @BatchInstancesJson            [out] (optional)
+ *   JSON array with the Batch Instances that were created, in run order: BATCH_INSTANCE_ID, BATCH_CODE,
+ *   PARENT_BATCH_INSTANCE_ID, LEVEL (0 for the Batch itself), INTERNAL_PROCESSING_STATUS_CODE and MODULE_COUNT.
  * @param {BIGINT}         @BatchInstanceId               [out] (optional)
  *   The identifier of the created Batch Instance.
  * @param {NVARCHAR(100)}  @InternalProcessingStatusCode  [out] (optional)
@@ -126,9 +134,11 @@ CREATE PROCEDURE [omd].[CreateBatchModuleInstances]
   ,@ConsistencyModuleTypeList     NVARCHAR(4000)  = NULL
   ,@SourceTimestampColumn         NVARCHAR(128)   = N'LOAD_DATETIME'
   ,@ReturnResultSet               CHAR(1)         = 'Y'
+  ,@IncludeChildBatches           CHAR(1)         = 'N'
   ,@Debug                         CHAR(1)         = 'N'
    -- Output parameters
   ,@ResultJson                    NVARCHAR(MAX)   = NULL  OUTPUT
+  ,@BatchInstancesJson            NVARCHAR(MAX)   = NULL  OUTPUT
   ,@BatchInstanceId               BIGINT          = NULL  OUTPUT
   ,@InternalProcessingStatusCode  NVARCHAR(100)   = NULL  OUTPUT
   ,@SuccessIndicator              CHAR(1)         = 'N'   OUTPUT
@@ -150,6 +160,8 @@ BEGIN
     SET @InternalProcessingStatusCode = NULL;
     SET @ResultJson = N'[]';
     SET @ReturnResultSet = CASE WHEN UPPER(COALESCE(@ReturnResultSet, 'Y')) = 'N' THEN 'N' ELSE 'Y' END;
+    SET @BatchInstancesJson = N'[]';
+    SET @IncludeChildBatches = CASE WHEN UPPER(COALESCE(@IncludeChildBatches, 'N')) = 'Y' THEN 'Y' ELSE 'N' END;
     SET @ParentBatchInstanceId = COALESCE(@ParentBatchInstanceId, 0);
     SET @ExecutionContext = COALESCE(@ExecutionContext, N'');
     SET @ModuleInstanceIdColumnName = COALESCE(NULLIF(TRIM(@ModuleInstanceIdColumnName), N''), N'MODULE_INSTANCE_ID');
@@ -189,6 +201,18 @@ BEGIN
       ,CONSISTENCY_DATETIME             NVARCHAR(27)    NULL
     );
 
+    -- The Batch Instances that are created by this call, in run order (the Batch itself first, then its child Batches).
+    DECLARE @BatchInstances TABLE
+    (
+       ROW_ORDER                        INT IDENTITY(1,1) NOT NULL
+      ,BATCH_INSTANCE_ID                BIGINT          NOT NULL
+      ,BATCH_CODE                       NVARCHAR(500)   NOT NULL
+      ,PARENT_BATCH_INSTANCE_ID         BIGINT          NULL
+      ,[LEVEL]                          INT             NOT NULL
+      ,INTERNAL_PROCESSING_STATUS_CODE  NVARCHAR(100)   NULL
+      ,MODULE_COUNT                     INT             NOT NULL
+    );
+
     -- Validate input parameters
     IF (@BatchCode IS NULL OR TRIM(@BatchCode) = N'')
     BEGIN
@@ -211,6 +235,7 @@ BEGIN
     SET @MessageLog = [omd].[AddLogMessage]('INFO', DEFAULT, N'Parameter @DefaultStartValue', @DefaultStartValue, @MessageLog);
     SET @MessageLog = [omd].[AddLogMessage]('INFO', DEFAULT, N'Parameter @ConsistencyModuleTypeList', @ConsistencyModuleTypeList, @MessageLog);
     SET @MessageLog = [omd].[AddLogMessage]('INFO', DEFAULT, N'Parameter @SourceTimestampColumn', @SourceTimestampColumn, @MessageLog);
+    SET @MessageLog = [omd].[AddLogMessage]('INFO', DEFAULT, N'Parameter @IncludeChildBatches', @IncludeChildBatches, @MessageLog);
 
 /*******************************************************************************
 * Start of main process
@@ -272,6 +297,8 @@ BEGIN
       -- End states for the Batch; the evaluation has already updated the Batch Instance. No Module Instances are created.
       SET @LogMessage = N'No Module Instances are created because the Batch Instance ended in ''' + @InternalProcessingStatusCode + N'''.';
       SET @MessageLog = [omd].[AddLogMessage](DEFAULT, DEFAULT, N'Status Update', @LogMessage, @MessageLog);
+      INSERT INTO @BatchInstances (BATCH_INSTANCE_ID, BATCH_CODE, PARENT_BATCH_INSTANCE_ID, [LEVEL], INTERNAL_PROCESSING_STATUS_CODE, MODULE_COUNT)
+      VALUES (@BatchInstanceId, @BatchCode, @ParentBatchInstanceId, 0, @InternalProcessingStatusCode, 0);
       GOTO EndOfProcedureSuccess;
     END
 
@@ -319,6 +346,9 @@ BEGIN
     DECLARE @ModuleCount INT = @@ROWCOUNT;
     SET @LogMessage = N'The Batch contains ' + CONVERT(NVARCHAR(10), @ModuleCount) + N' active Module(s).';
     SET @MessageLog = [omd].[AddLogMessage](DEFAULT, DEFAULT, N'Status Update', @LogMessage, @MessageLog);
+
+    INSERT INTO @BatchInstances (BATCH_INSTANCE_ID, BATCH_CODE, PARENT_BATCH_INSTANCE_ID, [LEVEL], INTERNAL_PROCESSING_STATUS_CODE, MODULE_COUNT)
+    VALUES (@BatchInstanceId, @BatchCode, @ParentBatchInstanceId, 0, @InternalProcessingStatusCode, @ModuleCount);
 
     -- The Module Types that get a consistency timestamp
     DECLARE @ConsistencyModuleTypes TABLE (MODULE_TYPE NVARCHAR(100) NOT NULL);
@@ -450,6 +480,133 @@ BEGIN
       SET @RowOrder = @RowOrder + 1;
     END
 
+    -- Child Batches, after the Modules of the Batch itself (the order omd.RunBatch uses)
+    IF @IncludeChildBatches = 'Y'
+    BEGIN
+      DECLARE @ChildBatches TABLE
+      (
+         ROW_ORDER    INT IDENTITY(1,1) NOT NULL
+        ,BATCH_CODE   NVARCHAR(500)   NOT NULL
+      );
+
+      INSERT INTO @ChildBatches (BATCH_CODE)
+      SELECT child.BATCH_CODE
+      FROM [omd].[BATCH_HIERARCHY] bh
+      JOIN [omd].[BATCH] child ON bh.BATCH_ID = child.BATCH_ID
+      WHERE bh.PARENT_BATCH_ID = @BatchId
+        AND bh.ACTIVE_INDICATOR = 'Y'
+        AND child.ACTIVE_INDICATOR = 'Y'
+        AND child.BATCH_ID <> @BatchId
+      ORDER BY bh.[SEQUENCE], child.BATCH_CODE;
+
+      DECLARE @ChildCount INT = @@ROWCOUNT;
+      SET @LogMessage = N'The Batch has ' + CONVERT(NVARCHAR(10), @ChildCount) + N' active child Batch(es).';
+      SET @MessageLog = [omd].[AddLogMessage](DEFAULT, DEFAULT, N'Status Update', @LogMessage, @MessageLog);
+
+      DECLARE @ChildOrder INT = 1;
+      DECLARE @ChildBatchCode NVARCHAR(500);
+      DECLARE @ChildBatchInstanceId BIGINT;
+      DECLARE @ChildProcessingStatusCode NVARCHAR(100);
+      DECLARE @ChildResultJson NVARCHAR(MAX);
+      DECLARE @ChildBatchInstancesJson NVARCHAR(MAX);
+
+      WHILE @ChildOrder <= @ChildCount
+      BEGIN
+        SELECT @ChildBatchCode = BATCH_CODE FROM @ChildBatches WHERE ROW_ORDER = @ChildOrder;
+        SET @ChildOrder = @ChildOrder + 1;
+
+        SET @ChildBatchInstanceId = NULL;
+        SET @ChildProcessingStatusCode = NULL;
+        SET @ChildResultJson = NULL;
+        SET @ChildBatchInstancesJson = NULL;
+        SET @StepMessageLog = N'';
+
+        SET @LogMessage = N'Opening child Batch ''' + @ChildBatchCode + N''' with Batch Instance ' + CONVERT(NVARCHAR(20), @BatchInstanceId) + N' as parent.';
+        SET @MessageLog = [omd].[AddLogMessage](DEFAULT, DEFAULT, N'Status Update', @LogMessage, @MessageLog);
+
+        EXEC [omd].[CreateBatchModuleInstances]
+           @BatchCode                     = @ChildBatchCode
+          ,@ParentBatchInstanceId         = @BatchInstanceId
+          ,@ExecutionContext              = @ExecutionContext
+          ,@ModuleInstanceIdColumnName    = @ModuleInstanceIdColumnName
+          ,@DefaultStartValue             = @DefaultStartValue
+          ,@ConsistencyModuleTypeList     = @ConsistencyModuleTypeList
+          ,@SourceTimestampColumn         = @SourceTimestampColumn
+          ,@ReturnResultSet               = 'N'
+          ,@IncludeChildBatches           = 'Y'
+          ,@Debug                         = @Debug
+          ,@ResultJson                    = @ChildResultJson OUTPUT
+          ,@BatchInstancesJson            = @ChildBatchInstancesJson OUTPUT
+          ,@BatchInstanceId               = @ChildBatchInstanceId OUTPUT
+          ,@InternalProcessingStatusCode  = @ChildProcessingStatusCode OUTPUT
+          ,@SuccessIndicator              = @StepSuccessIndicator OUTPUT
+          ,@MessageLog                    = @StepMessageLog OUTPUT;
+
+        IF @StepSuccessIndicator <> 'Y'
+        BEGIN
+          SET @LogMessage = N'The child Batch ''' + @ChildBatchCode + N''' could not be opened. The Batch Instance is failed.';
+          SET @MessageLog = [omd].[AddLogMessage]('ERROR', DEFAULT, N'Status Update', @LogMessage, @MessageLog);
+          SET @MessageLog = [omd].[AddLogMessage]('ERROR', DEFAULT, N'Child Batch Message Log', @StepMessageLog, @MessageLog);
+
+          SET @EventDetail = LEFT(@LogMessage, 4000);
+          IF @AddLogsToEventLog = 'Y' EXEC [omd].[InsertIntoEventLog] @ModuleInstanceId = 0, @EventDetail = @EventDetail, @BatchInstanceId = @BatchInstanceId;
+
+          IF @ThrowOnFailure = 'Y' THROW 50000, @LogMessage, 1;
+          ELSE GOTO EndOfProcedureFailure;
+        END
+
+        SET @LogMessage = N'Child Batch ''' + @ChildBatchCode + N''' was opened as Batch Instance ' + CONVERT(NVARCHAR(20), COALESCE(@ChildBatchInstanceId, 0))
+          + N' with Internal Processing Status Code ''' + COALESCE(@ChildProcessingStatusCode, N'NULL') + N'''.';
+        SET @MessageLog = [omd].[AddLogMessage](DEFAULT, DEFAULT, N'Status Update', @LogMessage, @MessageLog);
+
+        -- The rows of the child Batch (and its children) follow the rows of this Batch, in their own order
+        INSERT INTO @Result
+        (
+           BATCH_INSTANCE_ID, BATCH_CODE, MODULE_INSTANCE_ID, MODULE_ID, MODULE_CODE, MODULE_TYPE, AREA_CODE, [SEQUENCE]
+          ,EXECUTABLE, DATA_OBJECT_SOURCE, DATA_OBJECT_TARGET, PREVIOUS_END_VALUE, INTERNAL_PROCESSING_STATUS_CODE, ROLLBACK_STATEMENT, CONSISTENCY_DATETIME
+        )
+        SELECT
+           r.BATCH_INSTANCE_ID, r.BATCH_CODE, r.MODULE_INSTANCE_ID, r.MODULE_ID, r.MODULE_CODE, r.MODULE_TYPE, r.AREA_CODE, r.[SEQUENCE]
+          ,r.EXECUTABLE, r.DATA_OBJECT_SOURCE, r.DATA_OBJECT_TARGET, r.PREVIOUS_END_VALUE, r.INTERNAL_PROCESSING_STATUS_CODE, r.ROLLBACK_STATEMENT, r.CONSISTENCY_DATETIME
+        FROM OPENJSON(COALESCE(@ChildResultJson, N'[]')) arr
+        CROSS APPLY OPENJSON(arr.[value])
+        WITH
+        (
+           BATCH_INSTANCE_ID                BIGINT
+          ,BATCH_CODE                       NVARCHAR(500)
+          ,MODULE_INSTANCE_ID               BIGINT
+          ,MODULE_ID                        INT
+          ,MODULE_CODE                      NVARCHAR(500)
+          ,MODULE_TYPE                      NVARCHAR(100)
+          ,AREA_CODE                        NVARCHAR(100)
+          ,[SEQUENCE]                       INT
+          ,EXECUTABLE                       NVARCHAR(MAX)
+          ,DATA_OBJECT_SOURCE               NVARCHAR(1000)
+          ,DATA_OBJECT_TARGET               NVARCHAR(1000)
+          ,PREVIOUS_END_VALUE               NVARCHAR(100)
+          ,INTERNAL_PROCESSING_STATUS_CODE  NVARCHAR(100)
+          ,ROLLBACK_STATEMENT               NVARCHAR(MAX)
+          ,CONSISTENCY_DATETIME             NVARCHAR(27)
+        ) r
+        ORDER BY TRY_CONVERT(INT, arr.[key]);
+
+        INSERT INTO @BatchInstances (BATCH_INSTANCE_ID, BATCH_CODE, PARENT_BATCH_INSTANCE_ID, [LEVEL], INTERNAL_PROCESSING_STATUS_CODE, MODULE_COUNT)
+        SELECT b.BATCH_INSTANCE_ID, b.BATCH_CODE, b.PARENT_BATCH_INSTANCE_ID, b.[LEVEL] + 1, b.INTERNAL_PROCESSING_STATUS_CODE, b.MODULE_COUNT
+        FROM OPENJSON(COALESCE(@ChildBatchInstancesJson, N'[]')) arr
+        CROSS APPLY OPENJSON(arr.[value])
+        WITH
+        (
+           BATCH_INSTANCE_ID                BIGINT
+          ,BATCH_CODE                       NVARCHAR(500)
+          ,PARENT_BATCH_INSTANCE_ID         BIGINT
+          ,[LEVEL]                          INT
+          ,INTERNAL_PROCESSING_STATUS_CODE  NVARCHAR(100)
+          ,MODULE_COUNT                     INT
+        ) b
+        ORDER BY TRY_CONVERT(INT, arr.[key]);
+      END
+    END
+
     SET @SuccessIndicator = 'Y';
     GOTO EndOfProcedureSuccess;
 
@@ -462,6 +619,57 @@ BEGIN
       SET @LogMessage = N'Create Batch Module Instances process encountered errors.';
       SET @MessageLog = [omd].[AddLogMessage]('ERROR', DEFAULT, DEFAULT, @LogMessage, @MessageLog);
       SET @ReturnCode = -1;
+
+      -- Nothing that was opened by this call will run; the Module and Batch Instances that are still executing are
+      -- failed, so that they do not block the next run.
+      IF @BatchInstanceId IS NOT NULL
+      BEGIN
+        DECLARE @OpenInstances TABLE (ROW_ORDER INT IDENTITY(1,1) NOT NULL, MODULE_INSTANCE_ID BIGINT NOT NULL, BATCH_INSTANCE_ID BIGINT NULL);
+        INSERT INTO @OpenInstances (MODULE_INSTANCE_ID, BATCH_INSTANCE_ID)
+        SELECT mi.MODULE_INSTANCE_ID, mi.BATCH_INSTANCE_ID
+        FROM @Result r
+        JOIN [omd].[MODULE_INSTANCE] mi ON r.MODULE_INSTANCE_ID = mi.MODULE_INSTANCE_ID
+        WHERE mi.EXECUTION_STATUS_CODE = N'Executing'
+        ORDER BY r.ROW_ORDER;
+
+        DECLARE @OpenCount INT = @@ROWCOUNT;
+        DECLARE @OpenOrder INT = 1;
+        DECLARE @OpenModuleInstanceId BIGINT;
+        DECLARE @OpenBatchInstanceId BIGINT;
+        DECLARE @OpenEventDetail NVARCHAR(4000) = N'The Module Instance was opened, but the Batch could not be fully opened and nothing was run.';
+
+        WHILE @OpenOrder <= @OpenCount
+        BEGIN
+          SELECT @OpenModuleInstanceId = MODULE_INSTANCE_ID, @OpenBatchInstanceId = BATCH_INSTANCE_ID FROM @OpenInstances WHERE ROW_ORDER = @OpenOrder;
+          SET @OpenOrder = @OpenOrder + 1;
+          EXEC [omd].[InsertIntoEventLog] @ModuleInstanceId = @OpenModuleInstanceId, @EventDetail = @OpenEventDetail, @BatchInstanceId = @OpenBatchInstanceId, @Debug = @Debug;
+          EXEC [omd].[UpdateModuleInstance] @ModuleInstanceId = @OpenModuleInstanceId, @EventCode = N'Failure', @Debug = @Debug;
+        END
+
+        UPDATE @Result SET INTERNAL_PROCESSING_STATUS_CODE = N'Failure' WHERE MODULE_INSTANCE_ID IN (SELECT MODULE_INSTANCE_ID FROM @OpenInstances);
+
+        -- Child Batch Instances first (deepest last in the list, so in reverse order), then the Batch Instance itself
+        DECLARE @OpenBatches TABLE (ROW_ORDER INT IDENTITY(1,1) NOT NULL, BATCH_INSTANCE_ID BIGINT NOT NULL);
+        INSERT INTO @OpenBatches (BATCH_INSTANCE_ID)
+        SELECT b.BATCH_INSTANCE_ID
+        FROM (SELECT ROW_ORDER, BATCH_INSTANCE_ID FROM @BatchInstances UNION SELECT 0, @BatchInstanceId) b
+        JOIN [omd].[BATCH_INSTANCE] bi ON b.BATCH_INSTANCE_ID = bi.BATCH_INSTANCE_ID
+        WHERE bi.EXECUTION_STATUS_CODE = N'Executing'
+        ORDER BY b.ROW_ORDER DESC;
+
+        SET @OpenCount = @@ROWCOUNT;
+        SET @OpenOrder = 1;
+        WHILE @OpenOrder <= @OpenCount
+        BEGIN
+          SELECT @OpenBatchInstanceId = BATCH_INSTANCE_ID FROM @OpenBatches WHERE ROW_ORDER = @OpenOrder;
+          SET @OpenOrder = @OpenOrder + 1;
+          EXEC [omd].[UpdateBatchInstance] @BatchInstanceId = @OpenBatchInstanceId, @EventCode = N'Failure', @Debug = @Debug;
+        END
+
+        UPDATE @BatchInstances SET INTERNAL_PROCESSING_STATUS_CODE = N'Failure' WHERE BATCH_INSTANCE_ID IN (SELECT BATCH_INSTANCE_ID FROM @OpenBatches);
+        IF @BatchInstanceId IN (SELECT BATCH_INSTANCE_ID FROM @OpenBatches) SET @InternalProcessingStatusCode = N'Failure';
+      END
+
       GOTO EndOfProcedure;
 
     EndOfProcedureSuccess:
@@ -489,6 +697,14 @@ BEGIN
            BATCH_INSTANCE_ID, BATCH_CODE, MODULE_INSTANCE_ID, MODULE_ID, MODULE_CODE, MODULE_TYPE, AREA_CODE, [SEQUENCE]
           ,EXECUTABLE, DATA_OBJECT_SOURCE, DATA_OBJECT_TARGET, PREVIOUS_END_VALUE, INTERNAL_PROCESSING_STATUS_CODE, ROLLBACK_STATEMENT, CONSISTENCY_DATETIME
         FROM @Result
+        ORDER BY ROW_ORDER
+        FOR JSON PATH
+      ), N'[]');
+
+      SET @BatchInstancesJson = COALESCE(
+      (
+        SELECT BATCH_INSTANCE_ID, BATCH_CODE, PARENT_BATCH_INSTANCE_ID, [LEVEL], INTERNAL_PROCESSING_STATUS_CODE, MODULE_COUNT
+        FROM @BatchInstances
         ORDER BY ROW_ORDER
         FOR JSON PATH
       ), N'[]');
@@ -525,6 +741,7 @@ BEGIN
     -- Reset output parameters
     SET @SuccessIndicator = 'N';
     SET @ResultJson = N'[]';
+    SET @BatchInstancesJson = N'[]';
     SET @InternalProcessingStatusCode = COALESCE(@InternalProcessingStatusCode, N'Abort');
     SET @BatchInstanceId = @BatchInstanceId; -- keeps the created instance, if any; assignment required on every path
 

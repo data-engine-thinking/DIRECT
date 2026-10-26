@@ -14,6 +14,13 @@
  *   its Module Instances failed, and the 'Failure' event otherwise. The caller can override the Batch event with
  *   @BatchEventCode.
  *
+ *   With @IncludeChildBatches = 'Y' the child Batch Instances that were opened under the Batch Instance (by
+ *   [omd].[CreateBatchModuleInstances] with the same option) are closed as well: their Module Instances are accepted
+ *   in @ModuleResults, unreported ones are failed, and the child Batch Instances are closed from the deepest level
+ *   up. A Batch Instance fails when one of its Module Instances or one of its child Batch Instances failed, which
+ *   is how [omd].[RunBatch] behaves. Child Batch Instances that ended in their evaluation (Abort, Cancel) are left
+ *   as they are and do not fail the parent.
+ *
  *   The JSON array has one object per Module Instance. Keys are matched case-insensitively. Only ModuleInstanceId
  *   is required:
  *
@@ -40,12 +47,17 @@
  *   for a Batch without Modules.
  * @param {NVARCHAR(100)}  @BatchEventCode      [in]  (optional, default=NULL)
  *   'Success' or 'Failure' to override the Batch event that is derived from the Module Instance outcomes.
+ * @param {CHAR(1)}        @IncludeChildBatches [in]  (optional, default='N')
+ *   'Y' also closes the child Batch Instances of the Batch Instance, see the description.
  * @param {CHAR(1)}        @Debug               [in]  (optional, default='N')
  *   Enables debug logging.
  * @param {INT}            @ReportedCount       [out] (optional)
  *   The number of Module Instances that were reported and closed.
  * @param {INT}            @FailedCount         [out] (optional)
- *   The number of Module Instances of the Batch Instance that ended in 'Failure', reported or not.
+ *   The number of Module Instances of the Batch Instance (and its child Batch Instances, when included) that ended
+ *   in 'Failure', reported or not.
+ * @param {INT}            @FailedBatchCount    [out] (optional)
+ *   The number of child Batch Instances that ended in 'Failed'. Always 0 without @IncludeChildBatches.
  * @param {NVARCHAR(100)}  @ExecutionStatusCode [out] (optional)
  *   The Execution Status Code the Batch Instance ended with ('Succeeded' or 'Failed').
  * @param {CHAR(1)}        @SuccessIndicator    [out] (optional)
@@ -95,10 +107,12 @@ CREATE PROCEDURE [omd].[EndBatchModuleInstances]
    -- Optional parameters
   ,@ModuleResults          NVARCHAR(MAX)   = NULL
   ,@BatchEventCode         NVARCHAR(100)   = NULL
+  ,@IncludeChildBatches    CHAR(1)         = 'N'
   ,@Debug                  CHAR(1)         = 'N'
    -- Output parameters
   ,@ReportedCount          INT             = NULL  OUTPUT
   ,@FailedCount            INT             = NULL  OUTPUT
+  ,@FailedBatchCount       INT             = NULL  OUTPUT
   ,@ExecutionStatusCode    NVARCHAR(100)   = NULL  OUTPUT
   ,@SuccessIndicator       CHAR(1)         = 'N'   OUTPUT
   ,@MessageLog             NVARCHAR(MAX)   = N''   OUTPUT
@@ -117,6 +131,8 @@ BEGIN
     -- Prepare/clean process/output parameters
     SET @ReportedCount = 0;
     SET @FailedCount = 0;
+    SET @FailedBatchCount = 0;
+    SET @IncludeChildBatches = CASE WHEN UPPER(COALESCE(@IncludeChildBatches, 'N')) = 'Y' THEN 'Y' ELSE 'N' END;
     SET @ExecutionStatusCode = NULL;
     SET @ModuleResults = NULLIF(TRIM(COALESCE(@ModuleResults, N'')), N'');
     SET @BatchEventCode = NULLIF(TRIM(COALESCE(@BatchEventCode, N'')), N'');
@@ -167,6 +183,7 @@ BEGIN
     SET @MessageLog = [omd].[AddLogMessage]('INFO', DEFAULT, N'Parameter @BatchInstanceId', @BatchInstanceId, @MessageLog);
     SET @MessageLog = [omd].[AddLogMessage]('INFO', DEFAULT, N'Parameter @ModuleResults', @ModuleResults, @MessageLog);
     SET @MessageLog = [omd].[AddLogMessage]('INFO', DEFAULT, N'Parameter @BatchEventCode', @BatchEventCode, @MessageLog);
+    SET @MessageLog = [omd].[AddLogMessage]('INFO', DEFAULT, N'Parameter @IncludeChildBatches', @IncludeChildBatches, @MessageLog);
 
 /*******************************************************************************
 * Start of main process
@@ -190,6 +207,43 @@ BEGIN
       SET @ExecutionStatusCode = @BatchExecutionStatusCode;
       IF @ThrowOnFailure = 'Y' THROW 50000, @LogMessage, 1;
       ELSE GOTO EndOfProcedureFailure;
+    END
+
+    -- The Batch Instances whose Module Instances are closed by this call: the Batch Instance itself and, when
+    -- included, every Batch Instance opened under it.
+    DECLARE @BatchInstanceTree TABLE
+    (
+       BATCH_INSTANCE_ID          BIGINT          NOT NULL PRIMARY KEY
+      ,PARENT_BATCH_INSTANCE_ID   BIGINT          NULL
+      ,[LEVEL]                    INT             NOT NULL
+      ,EXECUTION_STATUS_CODE      NVARCHAR(100)   NULL
+    );
+
+    INSERT INTO @BatchInstanceTree (BATCH_INSTANCE_ID, PARENT_BATCH_INSTANCE_ID, [LEVEL], EXECUTION_STATUS_CODE)
+    VALUES (@BatchInstanceId, NULL, 0, @BatchExecutionStatusCode);
+
+    IF @IncludeChildBatches = 'Y'
+    BEGIN
+      ;WITH tree AS
+      (
+        SELECT bi.BATCH_INSTANCE_ID, bi.PARENT_BATCH_INSTANCE_ID, 1 AS [LEVEL]
+        FROM [omd].[BATCH_INSTANCE] bi
+        WHERE bi.PARENT_BATCH_INSTANCE_ID = @BatchInstanceId
+          AND bi.BATCH_INSTANCE_ID <> @BatchInstanceId
+        UNION ALL
+        SELECT bi.BATCH_INSTANCE_ID, bi.PARENT_BATCH_INSTANCE_ID, t.[LEVEL] + 1
+        FROM [omd].[BATCH_INSTANCE] bi
+        JOIN tree t ON bi.PARENT_BATCH_INSTANCE_ID = t.BATCH_INSTANCE_ID
+        WHERE bi.BATCH_INSTANCE_ID <> bi.PARENT_BATCH_INSTANCE_ID
+          AND t.[LEVEL] < 32
+      )
+      INSERT INTO @BatchInstanceTree (BATCH_INSTANCE_ID, PARENT_BATCH_INSTANCE_ID, [LEVEL], EXECUTION_STATUS_CODE)
+      SELECT t.BATCH_INSTANCE_ID, t.PARENT_BATCH_INSTANCE_ID, t.[LEVEL], bi.EXECUTION_STATUS_CODE
+      FROM tree t
+      JOIN [omd].[BATCH_INSTANCE] bi ON t.BATCH_INSTANCE_ID = bi.BATCH_INSTANCE_ID;
+
+      SET @LogMessage = N'The Batch Instance has ' + CONVERT(NVARCHAR(10), (SELECT COUNT(*) FROM @BatchInstanceTree WHERE [LEVEL] > 0)) + N' child Batch Instance(s).';
+      SET @MessageLog = [omd].[AddLogMessage](DEFAULT, DEFAULT, N'Status Update', @LogMessage, @MessageLog);
     END
 
     -- Interpret the reported results
@@ -283,9 +337,10 @@ BEGIN
       FROM [omd].[MODULE_INSTANCE]
       WHERE MODULE_INSTANCE_ID = @ModuleInstanceId;
 
-      IF @ModuleInstanceId IS NULL OR @ModuleBatchInstanceId IS NULL OR @ModuleBatchInstanceId <> @BatchInstanceId
+      IF @ModuleInstanceId IS NULL OR @ModuleBatchInstanceId IS NULL OR NOT EXISTS (SELECT 1 FROM @BatchInstanceTree WHERE BATCH_INSTANCE_ID = @ModuleBatchInstanceId)
       BEGIN
-        SET @LogMessage = N'Reported Module Instance Id ' + COALESCE(CONVERT(NVARCHAR(20), @ModuleInstanceId), N'NULL') + N' does not belong to Batch Instance Id ' + CONVERT(NVARCHAR(20), @BatchInstanceId) + N' and is skipped.';
+        SET @LogMessage = N'Reported Module Instance Id ' + COALESCE(CONVERT(NVARCHAR(20), @ModuleInstanceId), N'NULL') + N' does not belong to Batch Instance Id ' + CONVERT(NVARCHAR(20), @BatchInstanceId)
+          + CASE WHEN @IncludeChildBatches = 'Y' THEN N' or its child Batch Instances' ELSE N'' END + N' and is skipped.';
         SET @MessageLog = [omd].[AddLogMessage]('ERROR', DEFAULT, N'Status Update', @LogMessage, @MessageLog);
         SET @EventDetail = LEFT(@LogMessage, 4000);
         IF @AddLogsToEventLog = 'Y' EXEC [omd].[InsertIntoEventLog] @ModuleInstanceId = 0, @EventDetail = @EventDetail, @BatchInstanceId = @BatchInstanceId;
@@ -358,13 +413,13 @@ BEGIN
       SET @MessageLog = [omd].[AddLogMessage](DEFAULT, DEFAULT, N'Status Update', @LogMessage, @MessageLog);
     END
 
-    -- Module Instances of this Batch Instance that are still executing were not reported by the orchestrator; they are failed.
-    DECLARE @Unreported TABLE (ROW_ORDER INT IDENTITY(1,1) NOT NULL, MODULE_INSTANCE_ID BIGINT NOT NULL);
+    -- Module Instances of this Batch Instance (and its child Batch Instances) that are still executing were not reported by the orchestrator; they are failed.
+    DECLARE @Unreported TABLE (ROW_ORDER INT IDENTITY(1,1) NOT NULL, MODULE_INSTANCE_ID BIGINT NOT NULL, BATCH_INSTANCE_ID BIGINT NOT NULL);
 
-    INSERT INTO @Unreported (MODULE_INSTANCE_ID)
-    SELECT MODULE_INSTANCE_ID
+    INSERT INTO @Unreported (MODULE_INSTANCE_ID, BATCH_INSTANCE_ID)
+    SELECT MODULE_INSTANCE_ID, BATCH_INSTANCE_ID
     FROM [omd].[MODULE_INSTANCE]
-    WHERE BATCH_INSTANCE_ID = @BatchInstanceId
+    WHERE BATCH_INSTANCE_ID IN (SELECT BATCH_INSTANCE_ID FROM @BatchInstanceTree)
       AND EXECUTION_STATUS_CODE = N'Executing'
     ORDER BY MODULE_INSTANCE_ID;
 
@@ -373,7 +428,7 @@ BEGIN
 
     WHILE @RowOrder <= @UnreportedCount
     BEGIN
-      SELECT @ModuleInstanceId = MODULE_INSTANCE_ID FROM @Unreported WHERE ROW_ORDER = @RowOrder;
+      SELECT @ModuleInstanceId = MODULE_INSTANCE_ID, @ModuleBatchInstanceId = BATCH_INSTANCE_ID FROM @Unreported WHERE ROW_ORDER = @RowOrder;
       SET @RowOrder = @RowOrder + 1;
 
       SET @ModuleEventDetail = N'The Module Instance was still executing when the Batch Instance was closed and no result was reported by the orchestrator.';
@@ -383,7 +438,7 @@ BEGIN
       EXEC [omd].[InsertIntoEventLog]
          @ModuleInstanceId  = @ModuleInstanceId
         ,@EventDetail       = @ModuleEventDetail
-        ,@BatchInstanceId   = @BatchInstanceId
+        ,@BatchInstanceId   = @ModuleBatchInstanceId
         ,@Debug             = @Debug;
 
       EXEC [omd].[UpdateModuleInstance]
@@ -392,16 +447,69 @@ BEGIN
         ,@Debug              = @Debug;
     END
 
+    -- Child Batch Instances are closed from the deepest level up; a Batch Instance fails when one of its Module
+    -- Instances or one of its child Batch Instances failed.
+    IF @IncludeChildBatches = 'Y'
+    BEGIN
+      DECLARE @ChildBatchInstances TABLE (ROW_ORDER INT IDENTITY(1,1) NOT NULL, BATCH_INSTANCE_ID BIGINT NOT NULL);
+
+      INSERT INTO @ChildBatchInstances (BATCH_INSTANCE_ID)
+      SELECT BATCH_INSTANCE_ID
+      FROM @BatchInstanceTree
+      WHERE [LEVEL] > 0
+        AND EXECUTION_STATUS_CODE = N'Executing'
+      ORDER BY [LEVEL] DESC, BATCH_INSTANCE_ID;
+
+      DECLARE @ChildCount INT = @@ROWCOUNT;
+      DECLARE @ChildBatchInstanceId BIGINT;
+      DECLARE @ChildEventCode NVARCHAR(100);
+      SET @RowOrder = 1;
+
+      WHILE @RowOrder <= @ChildCount
+      BEGIN
+        SELECT @ChildBatchInstanceId = BATCH_INSTANCE_ID FROM @ChildBatchInstances WHERE ROW_ORDER = @RowOrder;
+        SET @RowOrder = @RowOrder + 1;
+
+        SET @ChildEventCode =
+          CASE
+            WHEN EXISTS (SELECT 1 FROM [omd].[MODULE_INSTANCE] WHERE BATCH_INSTANCE_ID = @ChildBatchInstanceId AND EXECUTION_STATUS_CODE = N'Failed')
+              OR EXISTS (SELECT 1 FROM [omd].[BATCH_INSTANCE] WHERE PARENT_BATCH_INSTANCE_ID = @ChildBatchInstanceId AND BATCH_INSTANCE_ID <> @ChildBatchInstanceId AND EXECUTION_STATUS_CODE = N'Failed')
+            THEN N'Failure'
+            ELSE N'Success'
+          END;
+
+        SET @LogMessage = N'Child Batch Instance Id ' + CONVERT(NVARCHAR(20), @ChildBatchInstanceId) + N' ends with event ''' + @ChildEventCode + N'''.';
+        SET @MessageLog = [omd].[AddLogMessage](DEFAULT, DEFAULT, N'Status Update', @LogMessage, @MessageLog);
+
+        EXEC [omd].[UpdateBatchInstance]
+           @BatchInstanceId   = @ChildBatchInstanceId
+          ,@EventCode         = @ChildEventCode
+          ,@Debug             = @Debug
+          ,@SuccessIndicator  = @StepSuccessIndicator OUTPUT
+          ,@MessageLog        = @StepMessageLog OUTPUT;
+
+        IF @StepSuccessIndicator <> 'Y'
+        BEGIN
+          SET @LogMessage = N'Child Batch Instance Id ' + CONVERT(NVARCHAR(20), @ChildBatchInstanceId) + N' could not be updated with event ''' + @ChildEventCode + N'''.';
+          SET @MessageLog = [omd].[AddLogMessage]('ERROR', DEFAULT, N'Status Update', @LogMessage, @MessageLog);
+          SET @MessageLog = [omd].[AddLogMessage]('ERROR', DEFAULT, N'UpdateBatchInstance Message Log', @StepMessageLog, @MessageLog);
+          SET @ProcessingErrorIndicator = 'Y';
+        END
+      END
+
+      SET @FailedBatchCount = (SELECT COUNT(*) FROM [omd].[BATCH_INSTANCE] WHERE BATCH_INSTANCE_ID IN (SELECT BATCH_INSTANCE_ID FROM @BatchInstanceTree WHERE [LEVEL] > 0) AND EXECUTION_STATUS_CODE = N'Failed');
+    END
+
     -- Batch outcome
-    SET @FailedCount = (SELECT COUNT(*) FROM [omd].[MODULE_INSTANCE] WHERE BATCH_INSTANCE_ID = @BatchInstanceId AND EXECUTION_STATUS_CODE = N'Failed');
+    SET @FailedCount = (SELECT COUNT(*) FROM [omd].[MODULE_INSTANCE] WHERE BATCH_INSTANCE_ID IN (SELECT BATCH_INSTANCE_ID FROM @BatchInstanceTree) AND EXECUTION_STATUS_CODE = N'Failed');
 
     DECLARE @DerivedBatchEventCode NVARCHAR(100) =
-      CASE WHEN @FailedCount > 0 OR @ProcessingErrorIndicator = 'Y' THEN N'Failure' ELSE N'Success' END;
+      CASE WHEN @FailedCount > 0 OR @FailedBatchCount > 0 OR @ProcessingErrorIndicator = 'Y' THEN N'Failure' ELSE N'Success' END;
     DECLARE @FinalBatchEventCode NVARCHAR(100) = COALESCE(@BatchEventCode, @DerivedBatchEventCode);
 
     SET @LogMessage = N'The Batch Instance ends with event ''' + @FinalBatchEventCode + N''' ('
       + CONVERT(NVARCHAR(10), @ReportedCount) + N' reported, ' + CONVERT(NVARCHAR(10), @UnreportedCount) + N' unreported, '
-      + CONVERT(NVARCHAR(10), @FailedCount) + N' failed Module Instance(s)).';
+      + CONVERT(NVARCHAR(10), @FailedCount) + N' failed Module Instance(s), ' + CONVERT(NVARCHAR(10), @FailedBatchCount) + N' failed child Batch Instance(s)).';
     SET @MessageLog = [omd].[AddLogMessage](DEFAULT, DEFAULT, N'Status Update', @LogMessage, @MessageLog);
 
     EXEC [omd].[UpdateBatchInstance]
@@ -473,6 +581,7 @@ BEGIN
     SET @SuccessIndicator = 'N';
     SET @ReportedCount = COALESCE(@ReportedCount, 0);
     SET @FailedCount = COALESCE(@FailedCount, 0);
+    SET @FailedBatchCount = COALESCE(@FailedBatchCount, 0);
     SET @ExecutionStatusCode = @ExecutionStatusCode; -- keeps the status reached, if any; assignment required on every path
 
     SET @MessageLog = [omd].[AddLogMessage]('INFO', DEFAULT, N'Parameter @SuccessIndicator Exit Value', @SuccessIndicator, @MessageLog);

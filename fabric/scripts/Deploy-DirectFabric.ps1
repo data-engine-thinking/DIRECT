@@ -11,7 +11,7 @@
        user (OAuth2, caller identity), unless connection ids are given.
     2. Creates or updates the Variable Library 'DIRECT' with the workspace, item, connection and load window
        settings. Pipelines bind to it by name.
-    3. Creates or updates the pipelines 'DIRECT Run Project', 'DIRECT Run Batch' and 'DIRECT Run Module'
+    3. Creates or updates the pipelines 'DIRECT Run Batch' and 'DIRECT Run Module'
        from fabric/items/*.DataPipeline/pipeline-content.json (run Build-PipelineDefinitions.ps1 first after
        changing templates or scripts).
 
@@ -77,7 +77,7 @@ $ErrorActionPreference = 'Stop'
 $fabricRoot = Split-Path -Path $PSScriptRoot -Parent
 $itemsFolder = Join-Path -Path $fabricRoot -ChildPath 'items'
 $libraryName = 'DIRECT'
-$pipelineNames = @('DIRECT Run Batch', 'DIRECT Run Module', 'DIRECT Run Project')
+$pipelineNames = @('DIRECT Run Batch', 'DIRECT Run Module')
 
 $token = Get-FabricAccessToken -TenantId $TenantId
 

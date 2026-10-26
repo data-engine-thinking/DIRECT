@@ -12,20 +12,21 @@ flowchart LR
   Run -- failed --> Fail["Fail Batch<br/>(Script on the repository)"]
 ```
 
-A Batch run is three activity runs, whatever the number of Modules:
+A Batch run is three activity runs, whatever the number of Modules and child Batches:
 
-1. **Open Batch** creates and evaluates the Batch Instance and the Module Instances of all active Modules in the Batch, in sequence, and returns the Modules to run as one JSON array: Module Instance Id, executable, previous load window end value, rollback statement (when an earlier instance failed) and, for configured Module Types, a consistency timestamp. Nothing is executed yet.
+1. **Open Batch** creates and evaluates the Batch Instance and the Module Instances of all active Modules in the Batch, in sequence, and then does the same for every active child Batch (`omd.BATCH_HIERARCHY`), recursively, with the Batch Instance as parent. This is the order `omd.RunBatch` uses: the Modules of a Batch first, then its child Batches in sequence. It returns the Modules to run as one JSON array in run order: Module Instance Id, Batch, executable, previous load window end value, rollback statement (when an earlier instance failed) and, for configured Module Types, a consistency timestamp. Nothing is executed yet.
 2. **Run Modules** runs on the Warehouse. For every Module in order it runs the rollback statement, determines the end of the load window as the maximum of the load window attribute in the source data object (the start value when the source is empty, the current time when the source has no such attribute), runs the executable through `sp_executesql` with the parameters `@ModuleInstanceId`, `@StartValue`, `@EndValue` and `@ConsistencyDateTime`, and counts the target rows before and after (a target with fewer rows than before counts as reset and reloaded). A failing Module is recorded and the next Module runs. The result is one JSON row per Module.
-3. **Close Batch** hands the results to `omd.EndBatchModuleInstances`, which records the load windows in `omd.SOURCE_CONTROL`, closes the Module Instances with their row counts, writes failure details to the event log, fails Module Instances that were left without a result, and closes the Batch Instance. The activity fails after the bookkeeping when a Module failed, so that the pipeline run shows the failure.
+3. **Close Batch** hands the results to `omd.EndBatchModuleInstances`, which records the load windows in `omd.SOURCE_CONTROL`, closes the Module Instances with their row counts, writes failure details to the event log, fails Module Instances that were left without a result, closes the child Batch Instances from the deepest level up and finally the Batch Instance itself. A failed Module or child Batch fails its Batch. The activity fails after the bookkeeping when something failed, so that the pipeline run shows the failure.
 
-The pipelines have concurrency 1: a run that starts while the previous one is still running waits. Together with the Abort evaluation of DIRECT this makes a short schedule (a trickle feed every few minutes) safe.
+So a main Batch that calls a Batch per layer, which in turn call the Batches of that layer, runs as one pipeline run with three activities and a full DIRECT audit trail at every level (one Batch Instance per Batch, linked through `PARENT_BATCH_INSTANCE_ID`). Any Batch in the hierarchy can be run on its own with the same pipeline, with its own children.
+
+The pipelines have concurrency 1: a run that starts while the previous one is still running waits. Together with the Abort evaluation of DIRECT this makes a short schedule (a trickle feed) safe. Schedule the main Batch at an interval that is longer than a full run.
 
 ## Pipelines
 
 | Pipeline | Parameters | Purpose |
 | --- | --- | --- |
-| `DIRECT Run Project` | `BatchCode` | Runs a project Batch: its own Modules first, then every active child Batch (from `omd_processing.vw_BATCH_HIERARCHY`) in sequence with the project Batch Instance as parent. The project Batch Instance fails when a child failed. This is the pipeline to schedule. |
-| `DIRECT Run Batch` | `BatchCode`, `ParentBatchInstanceId` (default `0`) | Runs one Batch as described above. |
+| `DIRECT Run Batch` | `BatchCode`, `ParentBatchInstanceId` (default `0`) | Runs a Batch with all its child Batches as described above. This is the pipeline to schedule, with the main Batch. |
 | `DIRECT Run Module` | `ModuleCode` | Runs one Module outside a Batch, for development and reruns. |
 
 ## The executable contract
@@ -81,7 +82,7 @@ Two routes lead to the same result.
 ```powershell
 cd fabric/scripts
 ./Deploy-DirectFabric.ps1 -WorkspaceId <workspace id> -RepositoryDatabaseItemId <sql database item id> -WarehouseItemId <warehouse item id> -ConsistencyModuleTypeList 'PIT'
-./Invoke-DirectPipeline.ps1 -WorkspaceId <workspace id> -PipelineName 'DIRECT Run Project' -BatchCode 'b_PROJECT'
+./Invoke-DirectPipeline.ps1 -WorkspaceId <workspace id> -PipelineName 'DIRECT Run Batch' -BatchCode 'b_MAIN'
 ./Set-DirectSchedule.ps1 -WorkspaceId <workspace id> -BatchCode 'b_PROJECT' -IntervalMinutes 5
 ./Set-DirectSchedule.ps1 -WorkspaceId <workspace id> -Disable
 ```
@@ -96,7 +97,7 @@ All three scripts take `-TenantId` for accounts that span several Entra tenants;
 
 | Path | Content |
 | --- | --- |
-| `items/` | The deployable Fabric items: three pipelines and the Variable Library, in the Git item layout. |
+| `items/` | The deployable Fabric items: two pipelines and the Variable Library, in the Git item layout. |
 | `sql/` | The T-SQL of the Script activities, one file per activity. Edit these, not the JSON. |
 | `templates/` | The pipeline definitions with `{{sql:<file>}}` tokens where the activity scripts go. |
 | `scripts/Build-PipelineDefinitions.ps1` | Builds `items/*/pipeline-content.json` from the templates and the SQL files. Run after a change and commit the result. |
@@ -107,7 +108,7 @@ All three scripts take `-TenantId` for accounts that span several Entra tenants;
 
 ## Cost and timing
 
-Fabric meters pipeline orchestration per activity run. A Batch costs three activity runs (four when a Module fails), and a project with N child Batches costs about 3N + 4 activity runs, independent of the number of Modules. A Batch of a few Modules completes in under a minute, most of which is activity start-up; the Module procedures themselves take well under a second each inside the Warehouse session.
+Fabric meters pipeline orchestration per activity run. A Batch run costs three activity runs (four when a Module fails), independent of the number of Modules and child Batches. A Batch of a few Modules completes in under a minute, most of which is activity start-up; the Module procedures themselves take well under a second each inside the Warehouse session, so a main Batch with some seventy Modules in three layers runs in a few minutes.
 
 ## Notes
 

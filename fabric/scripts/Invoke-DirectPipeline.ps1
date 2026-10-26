@@ -12,16 +12,16 @@
 .PARAMETER TenantId
     Entra tenant of the Fabric account, when the signed-in Az account spans several tenants or the default context is not the licensed one.
 .PARAMETER PipelineName
-    'DIRECT Run Project', 'DIRECT Run Batch' or 'DIRECT Run Module'.
+    'DIRECT Run Batch' or 'DIRECT Run Module'.
 .PARAMETER BatchCode
-    The Batch Code for Run Project and Run Batch.
+    The Batch Code for Run Batch (the Batch runs with all its child Batches).
 .PARAMETER ModuleCode
     The Module Code for Run Module.
 .PARAMETER TimeoutMinutes
     How long to wait for the run. Default 120.
 
 .EXAMPLE
-    ./Invoke-DirectPipeline.ps1 -WorkspaceId <ws> -PipelineName 'DIRECT Run Project' -BatchCode 'b_PROJECT'
+    ./Invoke-DirectPipeline.ps1 -WorkspaceId <ws> -PipelineName 'DIRECT Run Batch' -BatchCode 'b_MAIN'
 
 .NOTES
     File Name      : Invoke-DirectPipeline.ps1
@@ -35,7 +35,7 @@
 param(
   [Parameter(Mandatory)][string] $WorkspaceId,
   [string] $TenantId,
-  [Parameter(Mandatory)][ValidateSet('DIRECT Run Project', 'DIRECT Run Batch', 'DIRECT Run Module')][string] $PipelineName,
+  [Parameter(Mandatory)][ValidateSet('DIRECT Run Batch', 'DIRECT Run Module')][string] $PipelineName,
   [string] $BatchCode,
   [string] $ModuleCode,
   [int] $TimeoutMinutes = 120

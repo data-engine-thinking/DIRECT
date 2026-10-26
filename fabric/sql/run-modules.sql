@@ -1,5 +1,6 @@
 -- DIRECT Run Batch / Run Module, activity 'Run Modules' (target engine, Fabric Warehouse).
--- Runs the Modules in @Modules (JSON array with the rows of omd.CreateBatchModuleInstances) in order.
+-- Runs the Modules in @Modules (JSON array with the rows of omd.CreateBatchModuleInstances) in array order, which is the
+-- run order of the Batch and its child Batches.
 -- Per Module: rollback statement (if any), load window end from the source data object, the executable through
 -- sp_executesql with the parameters @ModuleInstanceId, @StartValue, @EndValue and @ConsistencyDateTime, and the
 -- target row count before and after. One result row per Module, in the shape omd.EndBatchModuleInstances expects.
@@ -7,6 +8,7 @@
 CREATE TABLE #modules
 (
    [SEQ]                            INT
+  ,[BATCH_CODE]                     VARCHAR(500)
   ,[MODULE_INSTANCE_ID]             BIGINT
   ,[MODULE_CODE]                    VARCHAR(500)
   ,[EXECUTABLE]                     VARCHAR(8000)
@@ -20,13 +22,14 @@ CREATE TABLE #modules
 
 INSERT INTO #modules
 SELECT
-   ROW_NUMBER() OVER (ORDER BY [SEQUENCE], [MODULE_CODE])
-  ,[MODULE_INSTANCE_ID], [MODULE_CODE], [EXECUTABLE], [DATA_OBJECT_SOURCE], [DATA_OBJECT_TARGET], [PREVIOUS_END_VALUE]
-  ,[INTERNAL_PROCESSING_STATUS_CODE], [ROLLBACK_STATEMENT], [CONSISTENCY_DATETIME]
-FROM OPENJSON(@Modules)
+   ROW_NUMBER() OVER (ORDER BY TRY_CONVERT(INT, arr.[key]))
+  ,r.[BATCH_CODE], r.[MODULE_INSTANCE_ID], r.[MODULE_CODE], r.[EXECUTABLE], r.[DATA_OBJECT_SOURCE], r.[DATA_OBJECT_TARGET], r.[PREVIOUS_END_VALUE]
+  ,r.[INTERNAL_PROCESSING_STATUS_CODE], r.[ROLLBACK_STATEMENT], r.[CONSISTENCY_DATETIME]
+FROM OPENJSON(@Modules) arr
+CROSS APPLY OPENJSON(arr.[value])
 WITH
 (
-   [SEQUENCE]                       INT
+   [BATCH_CODE]                     VARCHAR(500)
   ,[MODULE_INSTANCE_ID]             BIGINT
   ,[MODULE_CODE]                    VARCHAR(500)
   ,[EXECUTABLE]                     VARCHAR(8000)
@@ -36,12 +39,13 @@ WITH
   ,[INTERNAL_PROCESSING_STATUS_CODE] VARCHAR(100)
   ,[ROLLBACK_STATEMENT]             VARCHAR(8000)
   ,[CONSISTENCY_DATETIME]           VARCHAR(100)
-)
-WHERE [INTERNAL_PROCESSING_STATUS_CODE] = 'Proceed';
+) r
+WHERE r.[INTERNAL_PROCESSING_STATUS_CODE] = 'Proceed';
 
 CREATE TABLE #results
 (
    [Seq]              INT
+  ,[BatchCode]        VARCHAR(500)
   ,[ModuleInstanceId] BIGINT
   ,[ModuleCode]       VARCHAR(500)
   ,[EventCode]        VARCHAR(100)
@@ -58,7 +62,7 @@ DECLARE @n INT = (SELECT COUNT(*) FROM #modules);
 DECLARE @WindowColumn VARCHAR(128) = COALESCE(NULLIF(TRIM(@LoadWindowAttributeName), ''), 'INSCRIPTION_TIMESTAMP');
 DECLARE @ParameterDefinition NVARCHAR(500) = N'@ModuleInstanceId BIGINT, @StartValue VARCHAR(100), @EndValue VARCHAR(100), @ConsistencyDateTime VARCHAR(100)';
 
-DECLARE @ModuleInstanceId BIGINT, @ModuleCode VARCHAR(500), @Executable NVARCHAR(MAX), @Source VARCHAR(1000), @Target VARCHAR(1000);
+DECLARE @ModuleInstanceId BIGINT, @BatchCode VARCHAR(500), @ModuleCode VARCHAR(500), @Executable NVARCHAR(MAX), @Source VARCHAR(1000), @Target VARCHAR(1000);
 DECLARE @StartValue VARCHAR(100), @EndValue VARCHAR(100), @Rollback NVARCHAR(MAX), @ConsistencyDateTime VARCHAR(100);
 DECLARE @Sql NVARCHAR(MAX), @Before BIGINT, @After BIGINT, @T0 DATETIME2(6), @Step VARCHAR(50);
 DECLARE @WindowKnown BIT, @RowCountInsert BIGINT, @RowCountDeleted BIGINT;
@@ -68,7 +72,7 @@ BEGIN
   SET @i = @i + 1;
 
   SELECT
-     @ModuleInstanceId = [MODULE_INSTANCE_ID], @ModuleCode = [MODULE_CODE], @Executable = [EXECUTABLE]
+     @ModuleInstanceId = [MODULE_INSTANCE_ID], @BatchCode = [BATCH_CODE], @ModuleCode = [MODULE_CODE], @Executable = [EXECUTABLE]
     ,@Source = [DATA_OBJECT_SOURCE], @Target = [DATA_OBJECT_TARGET], @StartValue = [PREVIOUS_END_VALUE]
     ,@Rollback = [ROLLBACK_STATEMENT], @ConsistencyDateTime = [CONSISTENCY_DATETIME]
   FROM #modules
@@ -141,14 +145,14 @@ BEGIN
     SET @RowCountInsert = CASE WHEN @After >= @Before THEN @After - @Before ELSE @After END;
     SET @RowCountDeleted = CASE WHEN @After < @Before THEN @Before ELSE 0 END;
 
-    INSERT INTO #results VALUES (@i, @ModuleInstanceId, @ModuleCode, 'Success', @StartValue, @EndValue, @RowCountInsert, @RowCountDeleted, NULL, DATEDIFF(MILLISECOND, @T0, SYSDATETIME()));
+    INSERT INTO #results VALUES (@i, @BatchCode, @ModuleInstanceId, @ModuleCode, 'Success', @StartValue, @EndValue, @RowCountInsert, @RowCountDeleted, NULL, DATEDIFF(MILLISECOND, @T0, SYSDATETIME()));
   END TRY
   BEGIN CATCH
-    INSERT INTO #results VALUES (@i, @ModuleInstanceId, @ModuleCode, 'Failure', @StartValue, @EndValue, NULL, NULL,
+    INSERT INTO #results VALUES (@i, @BatchCode, @ModuleInstanceId, @ModuleCode, 'Failure', @StartValue, @EndValue, NULL, NULL,
       LEFT('Error in ' + @Step + ' (' + CONVERT(VARCHAR(20), ERROR_NUMBER()) + '): ' + ERROR_MESSAGE(), 4000), DATEDIFF(MILLISECOND, @T0, SYSDATETIME()));
   END CATCH;
 END;
 
-SELECT [Seq], [ModuleInstanceId], [ModuleCode], [EventCode], [StartValue], [EndValue], [RowCountInsert], [RowCountDeleted], [EventDetail], [DurationMs]
+SELECT [Seq], [BatchCode], [ModuleInstanceId], [ModuleCode], [EventCode], [StartValue], [EndValue], [RowCountInsert], [RowCountDeleted], [EventDetail], [DurationMs]
 FROM #results
 ORDER BY [Seq];

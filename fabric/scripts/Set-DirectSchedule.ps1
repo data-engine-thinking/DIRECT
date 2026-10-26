@@ -14,7 +14,7 @@
 .PARAMETER TenantId
     Entra tenant of the Fabric account, when the signed-in Az account spans several tenants or the default context is not the licensed one.
 .PARAMETER PipelineName
-    'DIRECT Run Project' or 'DIRECT Run Batch'. Default 'DIRECT Run Project'.
+    The pipeline to schedule. Default 'DIRECT Run Batch'.
 .PARAMETER BatchCode
     When given, the default value of the pipeline's BatchCode parameter is set to this value first.
 .PARAMETER IntervalMinutes
@@ -41,7 +41,7 @@
 param(
   [Parameter(Mandatory)][string] $WorkspaceId,
   [string] $TenantId,
-  [ValidateSet('DIRECT Run Project', 'DIRECT Run Batch')][string] $PipelineName = 'DIRECT Run Project',
+  [ValidateSet('DIRECT Run Batch')][string] $PipelineName = 'DIRECT Run Batch',
   [string] $BatchCode,
   [ValidateRange(1, 1440)][int] $IntervalMinutes = 5,
   [switch] $Disable,
