@@ -151,10 +151,15 @@ jobs:
           name: direct-framework-db
           path: Releases.Direct_Framework/next/db
 
+      - name: Restore the test project with the NuGet audit as a gate
+        # Warnings as errors on the restore alone: a vulnerable package (NU1902/NU1903) fails the run here.
+        run: dotnet restore Direct_Framework.Integration.Tests -p:TreatWarningsAsErrors=true
+
       - name: Run the integration tests
-        # Release treats warnings as errors, so the NuGet audit of the test project's packages gates the run too.
+        # Debug, as RunTestsSimple.ps1 does: the Release build of the test project fails on the code analysis
+        # rules that Directory.Build.props enables (AnalysisMode AllEnabledByDefault with warnings as errors).
         run: >
-          dotnet run --project Direct_Framework.Integration.Tests --configuration Release --
+          dotnet run --project Direct_Framework.Integration.Tests --configuration Debug --no-restore --
           --report-trx --report-trx-filename TestResults.trx --results-directory "${{ github.workspace }}/TestResults"
 
       - name: Upload the test results
