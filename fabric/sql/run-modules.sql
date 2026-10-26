@@ -48,6 +48,7 @@ CREATE TABLE #results
   ,[StartValue]       VARCHAR(100)
   ,[EndValue]         VARCHAR(100)
   ,[RowCountInsert]   BIGINT
+  ,[RowCountDeleted]  BIGINT
   ,[EventDetail]      VARCHAR(4000)
   ,[DurationMs]       INT
 );
@@ -60,6 +61,7 @@ DECLARE @ParameterDefinition NVARCHAR(500) = N'@ModuleInstanceId BIGINT, @StartV
 DECLARE @ModuleInstanceId BIGINT, @ModuleCode VARCHAR(500), @Executable NVARCHAR(MAX), @Source VARCHAR(1000), @Target VARCHAR(1000);
 DECLARE @StartValue VARCHAR(100), @EndValue VARCHAR(100), @Rollback NVARCHAR(MAX), @ConsistencyDateTime VARCHAR(100);
 DECLARE @Sql NVARCHAR(MAX), @Before BIGINT, @After BIGINT, @T0 DATETIME2(6), @Step VARCHAR(50);
+DECLARE @WindowKnown BIT, @RowCountInsert BIGINT, @RowCountDeleted BIGINT;
 
 WHILE @i < @n
 BEGIN
@@ -86,19 +88,22 @@ BEGIN
     END;
 
     -- Load window end: the latest load window attribute value in the source data object.
+    -- An empty source keeps the window closed at its start value, so that the recorded end does not run ahead of the data.
     -- When the source has no such attribute (for example an operational source), the current time is used.
     SET @Step = 'load window';
+    SET @WindowKnown = 0;
     IF @Source IS NOT NULL AND TRIM(@Source) <> ''
     BEGIN
       BEGIN TRY
         SET @Sql = N'SELECT @e = CONVERT(VARCHAR(27), MAX(' + QUOTENAME(@WindowColumn) + N'), 121) FROM ' + @Source;
         EXEC sp_executesql @Sql, N'@e VARCHAR(27) OUTPUT', @e = @EndValue OUTPUT;
+        SET @WindowKnown = 1;
       END TRY
       BEGIN CATCH
         SET @EndValue = NULL;
       END CATCH;
     END;
-    IF @EndValue IS NULL SET @EndValue = CONVERT(VARCHAR(27), SYSDATETIME(), 121);
+    IF @EndValue IS NULL SET @EndValue = CASE WHEN @WindowKnown = 1 THEN @StartValue ELSE CONVERT(VARCHAR(27), SYSDATETIME(), 121) END;
 
     -- Target row count before
     SET @Step = 'row count';
@@ -131,14 +136,19 @@ BEGIN
       END CATCH;
     END;
 
-    INSERT INTO #results VALUES (@i, @ModuleInstanceId, @ModuleCode, 'Success', @StartValue, @EndValue, @After - @Before, NULL, DATEDIFF(MILLISECOND, @T0, SYSDATETIME()));
+    -- Row counts from the target counts: a target that holds fewer rows than before was reset and reloaded
+    -- (for example a truncate-and-load Landing table), so its old rows count as deleted and the new rows as inserted.
+    SET @RowCountInsert = CASE WHEN @After >= @Before THEN @After - @Before ELSE @After END;
+    SET @RowCountDeleted = CASE WHEN @After < @Before THEN @Before ELSE 0 END;
+
+    INSERT INTO #results VALUES (@i, @ModuleInstanceId, @ModuleCode, 'Success', @StartValue, @EndValue, @RowCountInsert, @RowCountDeleted, NULL, DATEDIFF(MILLISECOND, @T0, SYSDATETIME()));
   END TRY
   BEGIN CATCH
-    INSERT INTO #results VALUES (@i, @ModuleInstanceId, @ModuleCode, 'Failure', @StartValue, @EndValue, NULL,
+    INSERT INTO #results VALUES (@i, @ModuleInstanceId, @ModuleCode, 'Failure', @StartValue, @EndValue, NULL, NULL,
       LEFT('Error in ' + @Step + ' (' + CONVERT(VARCHAR(20), ERROR_NUMBER()) + '): ' + ERROR_MESSAGE(), 4000), DATEDIFF(MILLISECOND, @T0, SYSDATETIME()));
   END CATCH;
 END;
 
-SELECT [Seq], [ModuleInstanceId], [ModuleCode], [EventCode], [StartValue], [EndValue], [RowCountInsert], [EventDetail], [DurationMs]
+SELECT [Seq], [ModuleInstanceId], [ModuleCode], [EventCode], [StartValue], [EndValue], [RowCountInsert], [RowCountDeleted], [EventDetail], [DurationMs]
 FROM #results
 ORDER BY [Seq];

@@ -5,7 +5,7 @@
 SET NOCOUNT ON;
 
 DECLARE @Id BIGINT = TRY_CONVERT(BIGINT, NULLIF(TRIM(@ModuleInstanceId), N''));
-DECLARE @EventCode NVARCHAR(100), @StartValue NVARCHAR(100), @EndValue NVARCHAR(100), @RowCountInsert BIGINT, @EventDetail NVARCHAR(4000);
+DECLARE @EventCode NVARCHAR(100), @StartValue NVARCHAR(100), @EndValue NVARCHAR(100), @RowCountInsert BIGINT, @RowCountDeleted BIGINT, @EventDetail NVARCHAR(4000);
 DECLARE @SuccessIndicator CHAR(1) = 'N';
 DECLARE @MessageLog NVARCHAR(MAX);
 DECLARE @ErrorMessage NVARCHAR(2048);
@@ -22,6 +22,7 @@ SELECT TOP 1
   ,@StartValue     = NULLIF(TRIM([StartValue]), N'')
   ,@EndValue       = NULLIF(TRIM([EndValue]), N'')
   ,@RowCountInsert = COALESCE([RowCountInsert], 0)
+  ,@RowCountDeleted = COALESCE([RowCountDeleted], 0)
   ,@EventDetail    = [EventDetail]
 FROM OPENJSON(NULLIF(TRIM(@ModuleResults), N''))
 WITH
@@ -31,6 +32,7 @@ WITH
   ,[StartValue]       NVARCHAR(100)
   ,[EndValue]         NVARCHAR(100)
   ,[RowCountInsert]   BIGINT
+  ,[RowCountDeleted]  BIGINT
   ,[EventDetail]      NVARCHAR(4000)
 )
 WHERE [ModuleInstanceId] = @Id;
@@ -55,6 +57,7 @@ EXEC [omd].[UpdateModuleInstance]
    @ModuleInstanceId  = @Id
   ,@EventCode         = @EventCode
   ,@RowCountInsert    = @RowCountInsert
+  ,@RowCountDeleted   = COALESCE(@RowCountDeleted, 0)
   ,@SuccessIndicator  = @SuccessIndicator OUTPUT
   ,@MessageLog        = @MessageLog OUTPUT;
 

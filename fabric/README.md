@@ -15,7 +15,7 @@ flowchart LR
 A Batch run is three activity runs, whatever the number of Modules:
 
 1. **Open Batch** creates and evaluates the Batch Instance and the Module Instances of all active Modules in the Batch, in sequence, and returns the Modules to run as one JSON array: Module Instance Id, executable, previous load window end value, rollback statement (when an earlier instance failed) and, for configured Module Types, a consistency timestamp. Nothing is executed yet.
-2. **Run Modules** runs on the Warehouse. For every Module in order it runs the rollback statement, determines the end of the load window as the maximum of the load window attribute in the source data object (or the current time when the source has no such attribute), runs the executable through `sp_executesql` with the parameters `@ModuleInstanceId`, `@StartValue`, `@EndValue` and `@ConsistencyDateTime`, and counts the target rows before and after. A failing Module is recorded and the next Module runs. The result is one JSON row per Module.
+2. **Run Modules** runs on the Warehouse. For every Module in order it runs the rollback statement, determines the end of the load window as the maximum of the load window attribute in the source data object (the start value when the source is empty, the current time when the source has no such attribute), runs the executable through `sp_executesql` with the parameters `@ModuleInstanceId`, `@StartValue`, `@EndValue` and `@ConsistencyDateTime`, and counts the target rows before and after (a target with fewer rows than before counts as reset and reloaded). A failing Module is recorded and the next Module runs. The result is one JSON row per Module.
 3. **Close Batch** hands the results to `omd.EndBatchModuleInstances`, which records the load windows in `omd.SOURCE_CONTROL`, closes the Module Instances with their row counts, writes failure details to the event log, fails Module Instances that were left without a result, and closes the Batch Instance. The activity fails after the bookkeeping when a Module failed, so that the pipeline run shows the failure.
 
 The pipelines have concurrency 1: a run that starts while the previous one is still running waits. Together with the Abort evaluation of DIRECT this makes a short schedule (a trickle feed every few minutes) safe.
@@ -36,7 +36,7 @@ The `EXECUTABLE` of a Module is T-SQL that runs on the Warehouse. It may use the
 | --- | --- | --- |
 | `@ModuleInstanceId` | `BIGINT` | The Module Instance Id of this run, to be written as the audit trail of the inserted rows. |
 | `@StartValue` | `VARCHAR(100)` | The end value of the previous load window of the Module (`DefaultStartValue` for the first run). |
-| `@EndValue` | `VARCHAR(100)` | The end of this load window: `MAX(<LoadWindowAttributeName>)` of the source data object, or the current time. |
+| `@EndValue` | `VARCHAR(100)` | The end of this load window: `MAX(<LoadWindowAttributeName>)` of the source data object; `@StartValue` when the source is empty; the current time when the source has no such attribute. |
 | `@ConsistencyDateTime` | `VARCHAR(100)` | The consistency timestamp for Modules whose type is in `ConsistencyModuleTypeList`, otherwise `NULL`. |
 
 Example registration:
