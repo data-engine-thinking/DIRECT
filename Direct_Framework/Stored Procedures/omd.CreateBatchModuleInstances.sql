@@ -41,8 +41,13 @@
  *   NULL means no consistency timestamp is calculated.
  * @param {NVARCHAR(128)}  @SourceTimestampColumn         [in]  (optional, default='LOAD_DATETIME')
  *   Passed to [omd].[GetConsistencyTimestamp].
+ * @param {CHAR(1)}        @ReturnResultSet               [in]  (optional, default='Y')
+ *   'N' suppresses the result set; the rows are then only available through @ResultJson. Callers that cannot
+ *   consume a result set next to output parameters (for example a pipeline Script activity) use this.
  * @param {CHAR(1)}        @Debug                         [in]  (optional, default='N')
  *   Enables debug logging.
+ * @param {NVARCHAR(MAX)}  @ResultJson                    [out] (optional)
+ *   The result set as a JSON array (FOR JSON PATH), '[]' when there are no rows.
  * @param {BIGINT}         @BatchInstanceId               [out] (optional)
  *   The identifier of the created Batch Instance.
  * @param {NVARCHAR(100)}  @InternalProcessingStatusCode  [out] (optional)
@@ -120,8 +125,10 @@ CREATE PROCEDURE [omd].[CreateBatchModuleInstances]
   ,@DefaultStartValue             NVARCHAR(100)   = N'1900-01-01'
   ,@ConsistencyModuleTypeList     NVARCHAR(4000)  = NULL
   ,@SourceTimestampColumn         NVARCHAR(128)   = N'LOAD_DATETIME'
+  ,@ReturnResultSet               CHAR(1)         = 'Y'
   ,@Debug                         CHAR(1)         = 'N'
    -- Output parameters
+  ,@ResultJson                    NVARCHAR(MAX)   = NULL  OUTPUT
   ,@BatchInstanceId               BIGINT          = NULL  OUTPUT
   ,@InternalProcessingStatusCode  NVARCHAR(100)   = NULL  OUTPUT
   ,@SuccessIndicator              CHAR(1)         = 'N'   OUTPUT
@@ -141,6 +148,8 @@ BEGIN
     -- Prepare/clean process/output parameters
     SET @BatchInstanceId = NULL;
     SET @InternalProcessingStatusCode = NULL;
+    SET @ResultJson = N'[]';
+    SET @ReturnResultSet = CASE WHEN UPPER(COALESCE(@ReturnResultSet, 'Y')) = 'N' THEN 'N' ELSE 'Y' END;
     SET @ParentBatchInstanceId = COALESCE(@ParentBatchInstanceId, 0);
     SET @ExecutionContext = COALESCE(@ExecutionContext, N'');
     SET @ModuleInstanceIdColumnName = COALESCE(NULLIF(TRIM(@ModuleInstanceIdColumnName), N''), N'MODULE_INSTANCE_ID');
@@ -264,6 +273,16 @@ BEGIN
       SET @LogMessage = N'No Module Instances are created because the Batch Instance ended in ''' + @InternalProcessingStatusCode + N'''.';
       SET @MessageLog = [omd].[AddLogMessage](DEFAULT, DEFAULT, N'Status Update', @LogMessage, @MessageLog);
       GOTO EndOfProcedureSuccess;
+    END
+
+    IF @InternalProcessingStatusCode <> N'Proceed'
+    BEGIN
+      -- The evaluation itself failed (for example a rollback error); the Batch Instance has been failed by the evaluation.
+      SET @LogMessage = N'The Batch Instance evaluation did not return ''Proceed'' but ''' + @InternalProcessingStatusCode + N'''. No Module Instances are created.';
+      SET @MessageLog = [omd].[AddLogMessage]('ERROR', DEFAULT, N'Status Update', @LogMessage, @MessageLog);
+      SET @MessageLog = [omd].[AddLogMessage]('ERROR', DEFAULT, N'BatchEvaluation Message Log', @StepMessageLog, @MessageLog);
+      IF @ThrowOnFailure = 'Y' THROW 50000, @LogMessage, 1;
+      ELSE GOTO EndOfProcedureFailure;
     END
 
     -- Collect the Modules of the Batch, in sequence
@@ -463,7 +482,20 @@ BEGIN
       SET @MessageLog = [omd].[AddLogMessage]('INFO', DEFAULT, N'Parameter @SuccessIndicator', @SuccessIndicator, @MessageLog);
       IF @Debug = 'Y' EXEC [omd].[PrintMessageLog] @MessageLog = @MessageLog;
 
-      -- The result set is returned in all cases, empty when no Module Instances were created.
+      -- The rows as JSON, for callers that cannot consume the result set
+      SET @ResultJson = COALESCE(
+      (
+        SELECT
+           BATCH_INSTANCE_ID, BATCH_CODE, MODULE_INSTANCE_ID, MODULE_ID, MODULE_CODE, MODULE_TYPE, AREA_CODE, [SEQUENCE]
+          ,EXECUTABLE, DATA_OBJECT_SOURCE, DATA_OBJECT_TARGET, PREVIOUS_END_VALUE, INTERNAL_PROCESSING_STATUS_CODE, ROLLBACK_STATEMENT, CONSISTENCY_DATETIME
+        FROM @Result
+        ORDER BY ROW_ORDER
+        FOR JSON PATH
+      ), N'[]');
+
+      IF @ReturnResultSet = 'N' RETURN @ReturnCode;
+
+      -- The result set is returned in all other cases, empty when no Module Instances were created.
       SELECT
          BATCH_INSTANCE_ID
         ,BATCH_CODE
@@ -492,6 +524,7 @@ BEGIN
   BEGIN CATCH
     -- Reset output parameters
     SET @SuccessIndicator = 'N';
+    SET @ResultJson = N'[]';
     SET @InternalProcessingStatusCode = COALESCE(@InternalProcessingStatusCode, N'Abort');
     SET @BatchInstanceId = @BatchInstanceId; -- keeps the created instance, if any; assignment required on every path
 

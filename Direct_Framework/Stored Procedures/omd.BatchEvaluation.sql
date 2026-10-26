@@ -359,7 +359,7 @@ BEGIN
     BEGIN
       BEGIN TRY
 
-      SET @SqlStatement = 'UPDATE omd.MODULE_INSTANCE SET NEXT_RUN_STATUS_CODE = ''Cancel'' WHERE EXECUTION_STATUS_CODE <> ''Failed'' AND BATCH_INSTANCE_ID IN (' + @FailedBatchIdArray + ')';
+      SET @SqlStatement = 'UPDATE omd.MODULE_INSTANCE SET NEXT_RUN_STATUS_CODE = ''Cancel'' WHERE EXECUTION_STATUS_CODE <> ''Failed'' AND BATCH_INSTANCE_ID IN ' + @FailedBatchIdArray; -- the list already carries its parentheses
 
       SET @LogMessage = 'Rollback SQL statement (partial) is: ' + @SqlStatement;
       SET @MessageLog = [omd].[AddLogMessage](DEFAULT, DEFAULT, N'Status Update', @LogMessage, @MessageLog)

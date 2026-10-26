@@ -433,7 +433,13 @@ BEGIN
           --SET @SqlStatement = 'DELETE FROM '+@TableCodeSafe+' WHERE (omd_module_instance_id IN '+@ModuleInstanceIdList+') OR (omd_update_module_instance_id IN '+@ModuleInstanceIdList+')';
         --ELSE
           -- @TableCodeSafe is already quoted (see the safety net above); quoting it again would break schema-qualified names.
-          SET @SqlStatement = 'DELETE FROM ' + @TableCodeSafe + ' WHERE ' + QUOTENAME(@ModuleInstanceIdColumnName) + ' IN (' + @ModuleInstanceIdList + ')';
+          DECLARE @ModuleInstanceIdListBare VARCHAR(MAX) =
+            CASE
+              WHEN LEFT(LTRIM(RTRIM(@ModuleInstanceIdList)), 1) = '(' AND RIGHT(LTRIM(RTRIM(@ModuleInstanceIdList)), 1) = ')'
+                THEN SUBSTRING(LTRIM(RTRIM(@ModuleInstanceIdList)), 2, LEN(LTRIM(RTRIM(@ModuleInstanceIdList))) - 2)
+              ELSE @ModuleInstanceIdList
+            END;
+          SET @SqlStatement = 'DELETE FROM ' + @TableCodeSafe + ' WHERE ' + QUOTENAME(@ModuleInstanceIdColumnName) + ' IN (' + @ModuleInstanceIdListBare + ')';
 
           SET @LogMessage = 'Rollback SQL statement is: ' + @SqlStatement
           SET @MessageLog = [omd].[AddLogMessage](DEFAULT, DEFAULT, N'Status Update', @LogMessage, @MessageLog)

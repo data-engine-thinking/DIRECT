@@ -15,26 +15,9 @@ DECLARE @ErrorMessage NVARCHAR(2048);
 DECLARE @ParentId BIGINT = COALESCE(TRY_CONVERT(BIGINT, NULLIF(TRIM(@ParentBatchInstanceId), N'')), 0);
 DECLARE @ConsistencyTypes NVARCHAR(4000) = NULLIF(TRIM(@ConsistencyModuleTypeList), N'');
 
-CREATE TABLE #modules
-(
-   BATCH_INSTANCE_ID               BIGINT
-  ,BATCH_CODE                      NVARCHAR(500)
-  ,MODULE_INSTANCE_ID              BIGINT
-  ,MODULE_ID                       INT
-  ,MODULE_CODE                     NVARCHAR(500)
-  ,MODULE_TYPE                     NVARCHAR(100)
-  ,AREA_CODE                       NVARCHAR(100)
-  ,[SEQUENCE]                      INT
-  ,EXECUTABLE                      NVARCHAR(MAX)
-  ,DATA_OBJECT_SOURCE              NVARCHAR(1000)
-  ,DATA_OBJECT_TARGET              NVARCHAR(1000)
-  ,PREVIOUS_END_VALUE              NVARCHAR(100)
-  ,INTERNAL_PROCESSING_STATUS_CODE NVARCHAR(100)
-  ,ROLLBACK_STATEMENT              NVARCHAR(MAX)
-  ,CONSISTENCY_DATETIME            NVARCHAR(27)
-);
+DECLARE @Modules NVARCHAR(MAX);
 
-INSERT INTO #modules
+-- The rows come back as JSON (no INSERT ... EXEC, which would wrap the call in a transaction that a failed evaluation dooms).
 EXEC [omd].[CreateBatchModuleInstances]
    @BatchCode                    = @BatchCode
   ,@ParentBatchInstanceId        = @ParentId
@@ -43,6 +26,8 @@ EXEC [omd].[CreateBatchModuleInstances]
   ,@DefaultStartValue            = @DefaultStartValue
   ,@ConsistencyModuleTypeList    = @ConsistencyTypes
   ,@SourceTimestampColumn        = @SourceTimestampColumn
+  ,@ReturnResultSet              = 'N'
+  ,@ResultJson                   = @Modules OUTPUT
   ,@BatchInstanceId              = @BatchInstanceId OUTPUT
   ,@InternalProcessingStatusCode = @InternalProcessingStatusCode OUTPUT
   ,@SuccessIndicator             = @SuccessIndicator OUTPUT
@@ -50,20 +35,28 @@ EXEC [omd].[CreateBatchModuleInstances]
 
 IF @SuccessIndicator <> 'Y'
 BEGIN
+  IF XACT_STATE() <> 0 ROLLBACK TRANSACTION;
   SET @ErrorMessage = LEFT(N'DIRECT could not open Batch ''' + COALESCE(@BatchCode, N'') + N''': ' + COALESCE(@MessageLog, N''), 2048);
   THROW 50000, @ErrorMessage, 1;
 END;
 
-DECLARE @Modules NVARCHAR(MAX) =
+-- Only the Modules that proceed are handed to the orchestrator
+SET @Modules = COALESCE(
 (
   SELECT
      BATCH_INSTANCE_ID, BATCH_CODE, MODULE_INSTANCE_ID, MODULE_ID, MODULE_CODE, MODULE_TYPE, AREA_CODE, [SEQUENCE]
     ,EXECUTABLE, DATA_OBJECT_SOURCE, DATA_OBJECT_TARGET, PREVIOUS_END_VALUE, INTERNAL_PROCESSING_STATUS_CODE, ROLLBACK_STATEMENT, CONSISTENCY_DATETIME
-  FROM #modules
+  FROM OPENJSON(@Modules)
+  WITH
+  (
+     BATCH_INSTANCE_ID BIGINT, BATCH_CODE NVARCHAR(500), MODULE_INSTANCE_ID BIGINT, MODULE_ID INT, MODULE_CODE NVARCHAR(500), MODULE_TYPE NVARCHAR(100)
+    ,AREA_CODE NVARCHAR(100), [SEQUENCE] INT, EXECUTABLE NVARCHAR(MAX), DATA_OBJECT_SOURCE NVARCHAR(1000), DATA_OBJECT_TARGET NVARCHAR(1000)
+    ,PREVIOUS_END_VALUE NVARCHAR(100), INTERNAL_PROCESSING_STATUS_CODE NVARCHAR(100), ROLLBACK_STATEMENT NVARCHAR(MAX), CONSISTENCY_DATETIME NVARCHAR(27)
+  )
   WHERE INTERNAL_PROCESSING_STATUS_CODE = N'Proceed'
   ORDER BY [SEQUENCE], MODULE_CODE
   FOR JSON PATH
-);
+), N'[]');
 
 DECLARE @ChildBatches NVARCHAR(MAX) =
 (
@@ -83,6 +76,6 @@ SELECT
    @BatchInstanceId AS BATCH_INSTANCE_ID
   ,@InternalProcessingStatusCode AS INTERNAL_PROCESSING_STATUS_CODE
   ,@BatchCode AS BATCH_CODE
-  ,(SELECT COUNT(*) FROM #modules WHERE INTERNAL_PROCESSING_STATUS_CODE = N'Proceed') AS MODULE_COUNT
-  ,COALESCE(@Modules, N'[]') AS MODULES
+  ,(SELECT COUNT(*) FROM OPENJSON(@Modules)) AS MODULE_COUNT
+  ,@Modules AS MODULES
   ,COALESCE(@ChildBatches, N'[]') AS CHILD_BATCHES;

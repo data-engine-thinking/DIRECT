@@ -294,6 +294,60 @@ public class OmdBatchModuleInstancesTests : BaseTestContainer
       "SELECT PARENT_BATCH_INSTANCE_ID FROM omd.BATCH_INSTANCE WHERE BATCH_INSTANCE_ID = @Id", new { Id = childParameters.Get<long>("@BatchInstanceId") });
     Assert.AreEqual(parentId, storedParent);
   }
+
+  [TestMethod]
+  public async Task CreateBatchModuleInstances_ReturnsRowsAsJson_WhenResultSetIsSuppressed()
+  {
+    using var conn = new SqlConnection(ContainerManager.DirectConnectionString);
+
+    var parameters = CreateParameters(BatchCode);
+    parameters.Add("@ReturnResultSet", "N");
+    parameters.Add("@ResultJson", dbType: System.Data.DbType.String, direction: System.Data.ParameterDirection.Output, size: -1);
+
+    var rows = (await conn.QueryAsync("[omd].[CreateBatchModuleInstances]", parameters, commandType: System.Data.CommandType.StoredProcedure)).ToList();
+    var messageLog = parameters.Get<string?>("@MessageLog");
+
+    Assert.AreEqual(0, parameters.Get<int>("@ReturnCode"), $"MessageLog: {messageLog}");
+    Assert.AreEqual("Proceed", parameters.Get<string?>("@InternalProcessingStatusCode"));
+    Assert.IsEmpty(rows, "No result set is returned when it is suppressed.");
+
+    var json = parameters.Get<string?>("@ResultJson");
+    Assert.IsNotNull(json);
+    var parsed = System.Text.Json.JsonDocument.Parse(json).RootElement;
+    Assert.AreEqual(System.Text.Json.JsonValueKind.Array, parsed.ValueKind);
+    Assert.AreEqual(2, parsed.GetArrayLength(), "One JSON object per Module in the Batch is expected.");
+    Assert.AreEqual(SecondModuleCode, parsed[0].GetProperty("MODULE_CODE").GetString(), "Rows are in SEQUENCE order.");
+    Assert.AreEqual("Proceed", parsed[0].GetProperty("INTERNAL_PROCESSING_STATUS_CODE").GetString());
+    Assert.AreEqual(parameters.Get<long>("@BatchInstanceId"), parsed[0].GetProperty("BATCH_INSTANCE_ID").GetInt64());
+  }
+
+  [TestMethod]
+  public async Task CreateBatchModuleInstances_Proceeds_AfterTwoFailedBatchInstances()
+  {
+    // Two failed Batch Instances in a row make omd.GetFailedBatchIdList return a list of two ids;
+    // the partial rollback in omd.BatchEvaluation must build a valid IN list from it.
+    using var conn = new SqlConnection(ContainerManager.DirectConnectionString);
+
+    for (var attempt = 1; attempt <= 2; attempt++)
+    {
+      var (rows, create) = await CreateAsync(conn, BatchCode);
+      Assert.AreEqual("Proceed", create.Get<string?>("@InternalProcessingStatusCode"), $"Attempt {attempt}: {create.Get<string?>("@MessageLog")}");
+      long firstInstance = rows[0].MODULE_INSTANCE_ID;
+      long secondInstance = rows[1].MODULE_INSTANCE_ID;
+      var results = $@"[ {{ ""ModuleInstanceId"": {firstInstance}, ""EventCode"": ""Success"" }}, {{ ""ModuleInstanceId"": {secondInstance}, ""EventCode"": ""Failure"", ""EventDetail"": ""Attempt {attempt} failed"" }} ]";
+      var end = EndParameters(create.Get<long>("@BatchInstanceId"), results);
+      await conn.ExecuteAsync("[omd].[EndBatchModuleInstances]", end, commandType: System.Data.CommandType.StoredProcedure);
+      Assert.AreEqual("Failed", end.Get<string?>("@ExecutionStatusCode"), end.Get<string?>("@MessageLog"));
+    }
+
+    var (thirdRows, third) = await CreateAsync(conn, BatchCode);
+
+    Assert.AreEqual(0, third.Get<int>("@ReturnCode"), third.Get<string?>("@MessageLog"));
+    Assert.AreEqual("Proceed", third.Get<string?>("@InternalProcessingStatusCode"), third.Get<string?>("@MessageLog"));
+    Assert.HasCount(2, thirdRows);
+    Assert.IsTrue(thirdRows.Any(r => r.ROLLBACK_STATEMENT != null && !((string)r.ROLLBACK_STATEMENT).Contains("((")),
+      "The rollback statement for the failed Module has a single pair of parentheses around the id list.");
+  }
 }
 
 // See references for test to code for assistants
