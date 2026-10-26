@@ -36,7 +36,8 @@ if ($Database -notmatch '^[A-Za-z_][A-Za-z0-9_]*$') { throw "The database name '
 $warehouseValue = if ($Warehouse) { $Warehouse } else { 'NONE' }
 
 function Invoke-SqlFile([string]$File) {
-    & snow sql -c $Connection -f $File -D "database=$Database" -D "warehouse=$warehouseValue" --enable-templating STANDARD
+    # The CLI output goes to the host, not into the pipeline, so that the exit code is the only return value.
+    & snow sql -c $Connection -f $File -D "database=$Database" -D "warehouse=$warehouseValue" --enable-templating STANDARD 2>&1 | Out-Host
     return $LASTEXITCODE
 }
 
