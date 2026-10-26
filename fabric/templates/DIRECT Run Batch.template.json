@@ -1,0 +1,483 @@
+{
+  "properties": {
+    "description": "Runs one DIRECT Batch: opens the Batch Instance and Module Instances in the repository, runs the Module executables on the Warehouse in sequence, and closes the instances with the outcome. Standard DIRECT asset; configure through the DIRECT Variable Library.",
+    "concurrency": 1,
+    "parameters": {
+      "BatchCode": {
+        "type": "string",
+        "defaultValue": ""
+      },
+      "ParentBatchInstanceId": {
+        "type": "string",
+        "defaultValue": "0"
+      }
+    },
+    "libraryVariables": {
+      "WorkspaceId": {
+        "type": "String",
+        "variableName": "WorkspaceId",
+        "libraryName": "DIRECT"
+      },
+      "RepositoryDatabaseItemId": {
+        "type": "String",
+        "variableName": "RepositoryDatabaseItemId",
+        "libraryName": "DIRECT"
+      },
+      "RepositoryConnectionId": {
+        "type": "String",
+        "variableName": "RepositoryConnectionId",
+        "libraryName": "DIRECT"
+      },
+      "WarehouseItemId": {
+        "type": "String",
+        "variableName": "WarehouseItemId",
+        "libraryName": "DIRECT"
+      },
+      "WarehouseEndpoint": {
+        "type": "String",
+        "variableName": "WarehouseEndpoint",
+        "libraryName": "DIRECT"
+      },
+      "WarehouseConnectionId": {
+        "type": "String",
+        "variableName": "WarehouseConnectionId",
+        "libraryName": "DIRECT"
+      },
+      "ModuleInstanceIdColumnName": {
+        "type": "String",
+        "variableName": "ModuleInstanceIdColumnName",
+        "libraryName": "DIRECT"
+      },
+      "DefaultStartValue": {
+        "type": "String",
+        "variableName": "DefaultStartValue",
+        "libraryName": "DIRECT"
+      },
+      "ConsistencyModuleTypeList": {
+        "type": "String",
+        "variableName": "ConsistencyModuleTypeList",
+        "libraryName": "DIRECT"
+      },
+      "SourceTimestampColumn": {
+        "type": "String",
+        "variableName": "SourceTimestampColumn",
+        "libraryName": "DIRECT"
+      },
+      "LoadWindowAttributeName": {
+        "type": "String",
+        "variableName": "LoadWindowAttributeName",
+        "libraryName": "DIRECT"
+      }
+    },
+    "activities": [
+      {
+        "name": "Open Batch",
+        "type": "Script",
+        "dependsOn": [],
+        "policy": {
+          "timeout": "0.02:00:00",
+          "retry": 0,
+          "retryIntervalInSeconds": 30,
+          "secureOutput": false,
+          "secureInput": false
+        },
+        "connectionSettings": {
+          "name": "DIRECT repository",
+          "properties": {
+            "annotations": [],
+            "type": "FabricSqlDatabase",
+            "typeProperties": {
+              "workspaceId": {
+                "value": "@pipeline().libraryVariables.WorkspaceId",
+                "type": "Expression"
+              },
+              "artifactId": {
+                "value": "@pipeline().libraryVariables.RepositoryDatabaseItemId",
+                "type": "Expression"
+              }
+            },
+            "externalReferences": {
+              "connection": {
+                "value": "@pipeline().libraryVariables.RepositoryConnectionId",
+                "type": "Expression"
+              }
+            }
+          }
+        },
+        "typeProperties": {
+          "scriptBlockExecutionTimeout": "02:00:00",
+          "scripts": [
+            {
+              "type": "Query",
+              "text": {
+                "value": "{{sql:open-batch.sql}}",
+                "type": "Expression"
+              },
+              "parameters": [
+                {
+                  "name": "BatchCode",
+                  "type": "String",
+                  "size": "500",
+                  "direction": "Input",
+                  "value": {
+                    "value": "@pipeline().parameters.BatchCode",
+                    "type": "Expression"
+                  }
+                },
+                {
+                  "name": "ParentBatchInstanceId",
+                  "type": "String",
+                  "size": "100",
+                  "direction": "Input",
+                  "value": {
+                    "value": "@pipeline().parameters.ParentBatchInstanceId",
+                    "type": "Expression"
+                  }
+                },
+                {
+                  "name": "ExecutionContext",
+                  "type": "String",
+                  "size": "4000",
+                  "direction": "Input",
+                  "value": {
+                    "value": "@concat('Fabric pipeline run ', pipeline().RunId, ' of ', pipeline().Pipeline)",
+                    "type": "Expression"
+                  }
+                },
+                {
+                  "name": "ModuleInstanceIdColumnName",
+                  "type": "String",
+                  "size": "1000",
+                  "direction": "Input",
+                  "value": {
+                    "value": "@pipeline().libraryVariables.ModuleInstanceIdColumnName",
+                    "type": "Expression"
+                  }
+                },
+                {
+                  "name": "DefaultStartValue",
+                  "type": "String",
+                  "size": "100",
+                  "direction": "Input",
+                  "value": {
+                    "value": "@pipeline().libraryVariables.DefaultStartValue",
+                    "type": "Expression"
+                  }
+                },
+                {
+                  "name": "ConsistencyModuleTypeList",
+                  "type": "String",
+                  "size": "4000",
+                  "direction": "Input",
+                  "value": {
+                    "value": "@pipeline().libraryVariables.ConsistencyModuleTypeList",
+                    "type": "Expression"
+                  }
+                },
+                {
+                  "name": "SourceTimestampColumn",
+                  "type": "String",
+                  "size": "128",
+                  "direction": "Input",
+                  "value": {
+                    "value": "@pipeline().libraryVariables.SourceTimestampColumn",
+                    "type": "Expression"
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "description": "Creates and evaluates the Batch Instance and the Module Instances with omd.CreateBatchModuleInstances; returns the Modules to run."
+      },
+      {
+        "name": "Run Modules",
+        "type": "Script",
+        "dependsOn": [
+          {
+            "activity": "Open Batch",
+            "dependencyConditions": [
+              "Succeeded"
+            ]
+          }
+        ],
+        "policy": {
+          "timeout": "0.02:00:00",
+          "retry": 0,
+          "retryIntervalInSeconds": 30,
+          "secureOutput": false,
+          "secureInput": false
+        },
+        "connectionSettings": {
+          "name": "Target Warehouse",
+          "properties": {
+            "annotations": [],
+            "type": "DataWarehouse",
+            "typeProperties": {
+              "workspaceId": {
+                "value": "@pipeline().libraryVariables.WorkspaceId",
+                "type": "Expression"
+              },
+              "artifactId": {
+                "value": "@pipeline().libraryVariables.WarehouseItemId",
+                "type": "Expression"
+              },
+              "endpoint": {
+                "value": "@pipeline().libraryVariables.WarehouseEndpoint",
+                "type": "Expression"
+              }
+            },
+            "externalReferences": {
+              "connection": {
+                "value": "@pipeline().libraryVariables.WarehouseConnectionId",
+                "type": "Expression"
+              }
+            }
+          }
+        },
+        "typeProperties": {
+          "scriptBlockExecutionTimeout": "02:00:00",
+          "scripts": [
+            {
+              "type": "Query",
+              "text": {
+                "value": "{{sql:run-modules.sql}}",
+                "type": "Expression"
+              },
+              "parameters": [
+                {
+                  "name": "Modules",
+                  "type": "String",
+                  "size": "-1",
+                  "direction": "Input",
+                  "value": {
+                    "value": "@string(activity('Open Batch').output.resultSets[0].rows[0].MODULES)",
+                    "type": "Expression"
+                  }
+                },
+                {
+                  "name": "LoadWindowAttributeName",
+                  "type": "String",
+                  "size": "128",
+                  "direction": "Input",
+                  "value": {
+                    "value": "@pipeline().libraryVariables.LoadWindowAttributeName",
+                    "type": "Expression"
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "description": "Runs the rollback statements and executables of the Modules on the Warehouse, in sequence, and collects the outcome per Module Instance."
+      },
+      {
+        "name": "Close Batch",
+        "type": "Script",
+        "dependsOn": [
+          {
+            "activity": "Run Modules",
+            "dependencyConditions": [
+              "Succeeded"
+            ]
+          }
+        ],
+        "policy": {
+          "timeout": "0.02:00:00",
+          "retry": 0,
+          "retryIntervalInSeconds": 30,
+          "secureOutput": false,
+          "secureInput": false
+        },
+        "connectionSettings": {
+          "name": "DIRECT repository",
+          "properties": {
+            "annotations": [],
+            "type": "FabricSqlDatabase",
+            "typeProperties": {
+              "workspaceId": {
+                "value": "@pipeline().libraryVariables.WorkspaceId",
+                "type": "Expression"
+              },
+              "artifactId": {
+                "value": "@pipeline().libraryVariables.RepositoryDatabaseItemId",
+                "type": "Expression"
+              }
+            },
+            "externalReferences": {
+              "connection": {
+                "value": "@pipeline().libraryVariables.RepositoryConnectionId",
+                "type": "Expression"
+              }
+            }
+          }
+        },
+        "typeProperties": {
+          "scriptBlockExecutionTimeout": "02:00:00",
+          "scripts": [
+            {
+              "type": "Query",
+              "text": {
+                "value": "{{sql:close-batch.sql}}",
+                "type": "Expression"
+              },
+              "parameters": [
+                {
+                  "name": "BatchInstanceId",
+                  "type": "String",
+                  "size": "100",
+                  "direction": "Input",
+                  "value": {
+                    "value": "@string(activity('Open Batch').output.resultSets[0].rows[0].BATCH_INSTANCE_ID)",
+                    "type": "Expression"
+                  }
+                },
+                {
+                  "name": "InternalProcessingStatusCode",
+                  "type": "String",
+                  "size": "100",
+                  "direction": "Input",
+                  "value": {
+                    "value": "@string(activity('Open Batch').output.resultSets[0].rows[0].INTERNAL_PROCESSING_STATUS_CODE)",
+                    "type": "Expression"
+                  }
+                },
+                {
+                  "name": "ModuleResults",
+                  "type": "String",
+                  "size": "-1",
+                  "direction": "Input",
+                  "value": {
+                    "value": "@string(activity('Run Modules').output.resultSets[0].rows)",
+                    "type": "Expression"
+                  }
+                },
+                {
+                  "name": "BatchEventCode",
+                  "type": "String",
+                  "size": "100",
+                  "direction": "Input",
+                  "value": {
+                    "value": "@string('')",
+                    "type": "Expression"
+                  }
+                },
+                {
+                  "name": "RaiseError",
+                  "type": "String",
+                  "size": "1",
+                  "direction": "Input",
+                  "value": {
+                    "value": "@string('Y')",
+                    "type": "Expression"
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "description": "Reports the Module results to omd.EndBatchModuleInstances and closes the Batch Instance."
+      },
+      {
+        "name": "Fail Batch",
+        "type": "Script",
+        "dependsOn": [
+          {
+            "activity": "Run Modules",
+            "dependencyConditions": [
+              "Failed"
+            ]
+          }
+        ],
+        "policy": {
+          "timeout": "0.02:00:00",
+          "retry": 0,
+          "retryIntervalInSeconds": 30,
+          "secureOutput": false,
+          "secureInput": false
+        },
+        "connectionSettings": {
+          "name": "DIRECT repository",
+          "properties": {
+            "annotations": [],
+            "type": "FabricSqlDatabase",
+            "typeProperties": {
+              "workspaceId": {
+                "value": "@pipeline().libraryVariables.WorkspaceId",
+                "type": "Expression"
+              },
+              "artifactId": {
+                "value": "@pipeline().libraryVariables.RepositoryDatabaseItemId",
+                "type": "Expression"
+              }
+            },
+            "externalReferences": {
+              "connection": {
+                "value": "@pipeline().libraryVariables.RepositoryConnectionId",
+                "type": "Expression"
+              }
+            }
+          }
+        },
+        "typeProperties": {
+          "scriptBlockExecutionTimeout": "02:00:00",
+          "scripts": [
+            {
+              "type": "Query",
+              "text": {
+                "value": "{{sql:fail-batch.sql}}",
+                "type": "Expression"
+              },
+              "parameters": [
+                {
+                  "name": "BatchInstanceId",
+                  "type": "String",
+                  "size": "100",
+                  "direction": "Input",
+                  "value": {
+                    "value": "@string(activity('Open Batch').output.resultSets[0].rows[0].BATCH_INSTANCE_ID)",
+                    "type": "Expression"
+                  }
+                },
+                {
+                  "name": "InternalProcessingStatusCode",
+                  "type": "String",
+                  "size": "100",
+                  "direction": "Input",
+                  "value": {
+                    "value": "@string(activity('Open Batch').output.resultSets[0].rows[0].INTERNAL_PROCESSING_STATUS_CODE)",
+                    "type": "Expression"
+                  }
+                },
+                {
+                  "name": "ErrorMessage",
+                  "type": "String",
+                  "size": "4000",
+                  "direction": "Input",
+                  "value": {
+                    "value": "@string(activity('Run Modules').error.message)",
+                    "type": "Expression"
+                  }
+                },
+                {
+                  "name": "RaiseError",
+                  "type": "String",
+                  "size": "1",
+                  "direction": "Input",
+                  "value": {
+                    "value": "@string('Y')",
+                    "type": "Expression"
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "description": "Closes the Batch Instance as Failure when the Modules could not be run."
+      }
+    ],
+    "annotations": [
+      "DIRECT"
+    ]
+  }
+}

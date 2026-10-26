@@ -3,17 +3,25 @@
  * @description Determine whether a Module Instance can proceed based on current and prior instance states.
  *
  * @package DIRECT Framework
- * @version 2.1.0
- * @see https://github.com/data-solution-automation-engine/DIRECT
+ * @version 2.2.0
+ * @see https://github.com/data-engine-thinking/DIRECT
  *
  * @param {BIGINT}        @ModuleInstanceId           [in] (required)
  *   The Module Instance Id to evaluate.
  * @param {NVARCHAR(1000)} @ModuleInstanceIdColumnName [in] (optional, default='MODULE_INSTANCE_ID')
  *   Column name used as Module Instance Id for rollback SQL.
+ * @param {CHAR(1)}       @ExecuteRollbackIndicator   [in] (optional, default='Y')
+ *   'Y' executes the rollback statement against the target data object in this database.
+ *   'N' returns the statement in @RollbackStatement instead, for an external orchestrator
+ *   whose target data object lives in another engine (such as a Fabric Warehouse).
+ *   The Source Control rows of the rolled-back instances are removed in both cases.
  * @param {CHAR(1)}       @Debug                      [in] (optional, default='N')
  *   Enables debug logging.
  * @param {NVARCHAR(100)} @InternalProcessingStatusCode [out] (optional, default='Cancel')
  *   One of: 'Proceed', 'Cancel', 'Abort', 'Rollback'.
+ * @param {NVARCHAR(MAX)} @RollbackStatement          [out] (optional)
+ *   The rollback DELETE statement for the target data object when @ExecuteRollbackIndicator = 'N'
+ *   and a rollback is due; otherwise NULL.
  * @param {CHAR(1)}       @SuccessIndicator           [out] (optional)
  *   'Y' if evaluation completed successfully; otherwise 'N'.
  * @param {NVARCHAR(MAX)} @MessageLog                 [out] (optional)
@@ -51,9 +59,11 @@ CREATE PROCEDURE [omd].[ModuleEvaluation]
    @ModuleInstanceId             BIGINT         = NULL
    -- Optional parameters
   ,@ModuleInstanceIdColumnName   NVARCHAR(1000) = 'MODULE_INSTANCE_ID'
+  ,@ExecuteRollbackIndicator     CHAR(1)        = 'Y'
   ,@Debug                        CHAR(1)        = 'N'
    -- Output parameters
   ,@InternalProcessingStatusCode NVARCHAR(100)  = 'Cancel' OUTPUT
+  ,@RollbackStatement            NVARCHAR(MAX)  = NULL OUTPUT
   ,@SuccessIndicator             CHAR(1)        = 'N' OUTPUT
   ,@MessageLog                   NVARCHAR(MAX)  = N'' OUTPUT
 )
@@ -62,6 +72,7 @@ BEGIN
   BEGIN TRY
     SET NOCOUNT ON;
     SET XACT_ABORT ON;
+    SET @RollbackStatement = NULL;
 
     -- Default output logging setup
     DECLARE @SpName NVARCHAR(100) = N'[' + OBJECT_SCHEMA_NAME(@@PROCID) + '].[' + OBJECT_NAME(@@PROCID) + ']';
@@ -426,7 +437,17 @@ BEGIN
           SET @LogMessage = 'Rollback SQL statement is: ' + @SqlStatement
           SET @MessageLog = [omd].[AddLogMessage](DEFAULT, DEFAULT, N'Status Update', @LogMessage, @MessageLog)
 
-          EXEC (@SqlStatement);
+          IF UPPER(COALESCE(@ExecuteRollbackIndicator, 'Y')) = 'Y'
+          BEGIN
+            EXEC (@SqlStatement);
+          END
+          ELSE
+          BEGIN
+            -- The target data object lives in another engine; the orchestrator runs the statement there.
+            SET @RollbackStatement = @SqlStatement;
+            SET @LogMessage = 'The rollback statement is returned to the caller (@ExecuteRollbackIndicator = N) and not executed here.'
+            SET @MessageLog = [omd].[AddLogMessage](DEFAULT, DEFAULT, N'Status Update', @LogMessage, @MessageLog)
+          END
 
           SET @SqlStatement = 'DELETE FROM omd.SOURCE_CONTROL WHERE MODULE_INSTANCE_ID IN (' +
             CASE

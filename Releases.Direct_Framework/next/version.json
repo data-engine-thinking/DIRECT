@@ -1,5 +1,5 @@
 {
-  "directFrameworkVersion": "2.1.0",
+  "directFrameworkVersion": "2.2.0",
   "sqlServerVersion": "2022",
   "compatibilityMode": "160",
   "defaultCollation": "SQL_Latin1_General_CP1_CS_AS",

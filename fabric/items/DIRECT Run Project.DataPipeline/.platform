@@ -1,0 +1,12 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/fabric/gitIntegration/platformProperties/2.0.0/schema.json",
+  "metadata": {
+    "type": "DataPipeline",
+    "displayName": "DIRECT Run Project",
+    "description": "Runs a DIRECT project Batch and its child Batches in sequence: opens the project Batch Instance, runs the project Batch's own Modules, runs every active child Batch (open, run, close) with the project Batch Instance as parent, and closes the project Batch Instance as Failure when any child failed. Standard DIRECT asset; configure through the DIRECT Variable Library."
+  },
+  "config": {
+    "version": "2.0",
+    "logicalId": "5b1a6a0e-4d2c-4f7e-9a3b-2c7d1e8f0a12"
+  }
+}

@@ -1,0 +1,449 @@
+{
+  "properties": {
+    "description": "Runs one DIRECT Module outside a Batch: opens and evaluates the Module Instance in the repository, runs the executable on the Warehouse, and closes the instance with the outcome. Standard DIRECT asset; configure through the DIRECT Variable Library.",
+    "concurrency": 1,
+    "parameters": {
+      "ModuleCode": {
+        "type": "string",
+        "defaultValue": ""
+      }
+    },
+    "libraryVariables": {
+      "WorkspaceId": {
+        "type": "String",
+        "variableName": "WorkspaceId",
+        "libraryName": "DIRECT"
+      },
+      "RepositoryDatabaseItemId": {
+        "type": "String",
+        "variableName": "RepositoryDatabaseItemId",
+        "libraryName": "DIRECT"
+      },
+      "RepositoryConnectionId": {
+        "type": "String",
+        "variableName": "RepositoryConnectionId",
+        "libraryName": "DIRECT"
+      },
+      "WarehouseItemId": {
+        "type": "String",
+        "variableName": "WarehouseItemId",
+        "libraryName": "DIRECT"
+      },
+      "WarehouseEndpoint": {
+        "type": "String",
+        "variableName": "WarehouseEndpoint",
+        "libraryName": "DIRECT"
+      },
+      "WarehouseConnectionId": {
+        "type": "String",
+        "variableName": "WarehouseConnectionId",
+        "libraryName": "DIRECT"
+      },
+      "ModuleInstanceIdColumnName": {
+        "type": "String",
+        "variableName": "ModuleInstanceIdColumnName",
+        "libraryName": "DIRECT"
+      },
+      "DefaultStartValue": {
+        "type": "String",
+        "variableName": "DefaultStartValue",
+        "libraryName": "DIRECT"
+      },
+      "ConsistencyModuleTypeList": {
+        "type": "String",
+        "variableName": "ConsistencyModuleTypeList",
+        "libraryName": "DIRECT"
+      },
+      "SourceTimestampColumn": {
+        "type": "String",
+        "variableName": "SourceTimestampColumn",
+        "libraryName": "DIRECT"
+      },
+      "LoadWindowAttributeName": {
+        "type": "String",
+        "variableName": "LoadWindowAttributeName",
+        "libraryName": "DIRECT"
+      }
+    },
+    "activities": [
+      {
+        "name": "Open Module",
+        "type": "Script",
+        "dependsOn": [],
+        "policy": {
+          "timeout": "0.02:00:00",
+          "retry": 0,
+          "retryIntervalInSeconds": 30,
+          "secureOutput": false,
+          "secureInput": false
+        },
+        "connectionSettings": {
+          "name": "DIRECT repository",
+          "properties": {
+            "annotations": [],
+            "type": "FabricSqlDatabase",
+            "typeProperties": {
+              "workspaceId": {
+                "value": "@pipeline().libraryVariables.WorkspaceId",
+                "type": "Expression"
+              },
+              "artifactId": {
+                "value": "@pipeline().libraryVariables.RepositoryDatabaseItemId",
+                "type": "Expression"
+              }
+            },
+            "externalReferences": {
+              "connection": {
+                "value": "@pipeline().libraryVariables.RepositoryConnectionId",
+                "type": "Expression"
+              }
+            }
+          }
+        },
+        "typeProperties": {
+          "scriptBlockExecutionTimeout": "02:00:00",
+          "scripts": [
+            {
+              "type": "Query",
+              "text": {
+                "value": "{{sql:open-module.sql}}",
+                "type": "Expression"
+              },
+              "parameters": [
+                {
+                  "name": "ModuleCode",
+                  "type": "String",
+                  "size": "500",
+                  "direction": "Input",
+                  "value": {
+                    "value": "@pipeline().parameters.ModuleCode",
+                    "type": "Expression"
+                  }
+                },
+                {
+                  "name": "ExecutionContext",
+                  "type": "String",
+                  "size": "4000",
+                  "direction": "Input",
+                  "value": {
+                    "value": "@concat('Fabric pipeline run ', pipeline().RunId, ' of ', pipeline().Pipeline)",
+                    "type": "Expression"
+                  }
+                },
+                {
+                  "name": "ModuleInstanceIdColumnName",
+                  "type": "String",
+                  "size": "1000",
+                  "direction": "Input",
+                  "value": {
+                    "value": "@pipeline().libraryVariables.ModuleInstanceIdColumnName",
+                    "type": "Expression"
+                  }
+                },
+                {
+                  "name": "DefaultStartValue",
+                  "type": "String",
+                  "size": "100",
+                  "direction": "Input",
+                  "value": {
+                    "value": "@pipeline().libraryVariables.DefaultStartValue",
+                    "type": "Expression"
+                  }
+                },
+                {
+                  "name": "ConsistencyModuleTypeList",
+                  "type": "String",
+                  "size": "4000",
+                  "direction": "Input",
+                  "value": {
+                    "value": "@pipeline().libraryVariables.ConsistencyModuleTypeList",
+                    "type": "Expression"
+                  }
+                },
+                {
+                  "name": "SourceTimestampColumn",
+                  "type": "String",
+                  "size": "128",
+                  "direction": "Input",
+                  "value": {
+                    "value": "@pipeline().libraryVariables.SourceTimestampColumn",
+                    "type": "Expression"
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "description": "Creates and evaluates the Module Instance; returns the Module to run."
+      },
+      {
+        "name": "Run Modules",
+        "type": "Script",
+        "dependsOn": [
+          {
+            "activity": "Open Module",
+            "dependencyConditions": [
+              "Succeeded"
+            ]
+          }
+        ],
+        "policy": {
+          "timeout": "0.02:00:00",
+          "retry": 0,
+          "retryIntervalInSeconds": 30,
+          "secureOutput": false,
+          "secureInput": false
+        },
+        "connectionSettings": {
+          "name": "Target Warehouse",
+          "properties": {
+            "annotations": [],
+            "type": "DataWarehouse",
+            "typeProperties": {
+              "workspaceId": {
+                "value": "@pipeline().libraryVariables.WorkspaceId",
+                "type": "Expression"
+              },
+              "artifactId": {
+                "value": "@pipeline().libraryVariables.WarehouseItemId",
+                "type": "Expression"
+              },
+              "endpoint": {
+                "value": "@pipeline().libraryVariables.WarehouseEndpoint",
+                "type": "Expression"
+              }
+            },
+            "externalReferences": {
+              "connection": {
+                "value": "@pipeline().libraryVariables.WarehouseConnectionId",
+                "type": "Expression"
+              }
+            }
+          }
+        },
+        "typeProperties": {
+          "scriptBlockExecutionTimeout": "02:00:00",
+          "scripts": [
+            {
+              "type": "Query",
+              "text": {
+                "value": "{{sql:run-modules.sql}}",
+                "type": "Expression"
+              },
+              "parameters": [
+                {
+                  "name": "Modules",
+                  "type": "String",
+                  "size": "-1",
+                  "direction": "Input",
+                  "value": {
+                    "value": "@string(activity('Open Module').output.resultSets[0].rows[0].MODULES)",
+                    "type": "Expression"
+                  }
+                },
+                {
+                  "name": "LoadWindowAttributeName",
+                  "type": "String",
+                  "size": "128",
+                  "direction": "Input",
+                  "value": {
+                    "value": "@pipeline().libraryVariables.LoadWindowAttributeName",
+                    "type": "Expression"
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "description": "Runs the rollback statements and executables of the Modules on the Warehouse, in sequence, and collects the outcome per Module Instance."
+      },
+      {
+        "name": "Close Module",
+        "type": "Script",
+        "dependsOn": [
+          {
+            "activity": "Run Modules",
+            "dependencyConditions": [
+              "Succeeded"
+            ]
+          }
+        ],
+        "policy": {
+          "timeout": "0.02:00:00",
+          "retry": 0,
+          "retryIntervalInSeconds": 30,
+          "secureOutput": false,
+          "secureInput": false
+        },
+        "connectionSettings": {
+          "name": "DIRECT repository",
+          "properties": {
+            "annotations": [],
+            "type": "FabricSqlDatabase",
+            "typeProperties": {
+              "workspaceId": {
+                "value": "@pipeline().libraryVariables.WorkspaceId",
+                "type": "Expression"
+              },
+              "artifactId": {
+                "value": "@pipeline().libraryVariables.RepositoryDatabaseItemId",
+                "type": "Expression"
+              }
+            },
+            "externalReferences": {
+              "connection": {
+                "value": "@pipeline().libraryVariables.RepositoryConnectionId",
+                "type": "Expression"
+              }
+            }
+          }
+        },
+        "typeProperties": {
+          "scriptBlockExecutionTimeout": "02:00:00",
+          "scripts": [
+            {
+              "type": "Query",
+              "text": {
+                "value": "{{sql:close-module.sql}}",
+                "type": "Expression"
+              },
+              "parameters": [
+                {
+                  "name": "ModuleInstanceId",
+                  "type": "String",
+                  "size": "100",
+                  "direction": "Input",
+                  "value": {
+                    "value": "@string(activity('Open Module').output.resultSets[0].rows[0].MODULE_INSTANCE_ID)",
+                    "type": "Expression"
+                  }
+                },
+                {
+                  "name": "InternalProcessingStatusCode",
+                  "type": "String",
+                  "size": "100",
+                  "direction": "Input",
+                  "value": {
+                    "value": "@string(activity('Open Module').output.resultSets[0].rows[0].INTERNAL_PROCESSING_STATUS_CODE)",
+                    "type": "Expression"
+                  }
+                },
+                {
+                  "name": "ModuleResults",
+                  "type": "String",
+                  "size": "-1",
+                  "direction": "Input",
+                  "value": {
+                    "value": "@string(activity('Run Modules').output.resultSets[0].rows)",
+                    "type": "Expression"
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "description": "Records the load window and the outcome of the Module Instance."
+      },
+      {
+        "name": "Fail Module",
+        "type": "Script",
+        "dependsOn": [
+          {
+            "activity": "Run Modules",
+            "dependencyConditions": [
+              "Failed"
+            ]
+          }
+        ],
+        "policy": {
+          "timeout": "0.02:00:00",
+          "retry": 0,
+          "retryIntervalInSeconds": 30,
+          "secureOutput": false,
+          "secureInput": false
+        },
+        "connectionSettings": {
+          "name": "DIRECT repository",
+          "properties": {
+            "annotations": [],
+            "type": "FabricSqlDatabase",
+            "typeProperties": {
+              "workspaceId": {
+                "value": "@pipeline().libraryVariables.WorkspaceId",
+                "type": "Expression"
+              },
+              "artifactId": {
+                "value": "@pipeline().libraryVariables.RepositoryDatabaseItemId",
+                "type": "Expression"
+              }
+            },
+            "externalReferences": {
+              "connection": {
+                "value": "@pipeline().libraryVariables.RepositoryConnectionId",
+                "type": "Expression"
+              }
+            }
+          }
+        },
+        "typeProperties": {
+          "scriptBlockExecutionTimeout": "02:00:00",
+          "scripts": [
+            {
+              "type": "Query",
+              "text": {
+                "value": "{{sql:fail-module.sql}}",
+                "type": "Expression"
+              },
+              "parameters": [
+                {
+                  "name": "ModuleInstanceId",
+                  "type": "String",
+                  "size": "100",
+                  "direction": "Input",
+                  "value": {
+                    "value": "@string(activity('Open Module').output.resultSets[0].rows[0].MODULE_INSTANCE_ID)",
+                    "type": "Expression"
+                  }
+                },
+                {
+                  "name": "InternalProcessingStatusCode",
+                  "type": "String",
+                  "size": "100",
+                  "direction": "Input",
+                  "value": {
+                    "value": "@string(activity('Open Module').output.resultSets[0].rows[0].INTERNAL_PROCESSING_STATUS_CODE)",
+                    "type": "Expression"
+                  }
+                },
+                {
+                  "name": "ErrorMessage",
+                  "type": "String",
+                  "size": "4000",
+                  "direction": "Input",
+                  "value": {
+                    "value": "@string(activity('Run Modules').error.message)",
+                    "type": "Expression"
+                  }
+                },
+                {
+                  "name": "RaiseError",
+                  "type": "String",
+                  "size": "1",
+                  "direction": "Input",
+                  "value": {
+                    "value": "@string('Y')",
+                    "type": "Expression"
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "description": "Closes the Module Instance as Failure when the executable could not be run."
+      }
+    ],
+    "annotations": [
+      "DIRECT"
+    ]
+  }
+}
