@@ -1,0 +1,226 @@
+# Builds the DIRECT Framework dacpac, runs the integration tests and publishes a GitHub release.
+#
+# Every push to main and every pull request builds the dacpac on Windows (the SQL project runs
+# cmd pre- and post-build scripts) and runs the integration tests on Linux (they need a Linux
+# SQL Server container). A push to main also publishes the release v<version> when the version
+# in .direct-version has no release yet, so a release is cut by merging the version bump.
+#
+# A manual run (workflow_dispatch) builds and tests any branch; tick 'publish' to also publish
+# the release from that branch.
+
+name: Build and release
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish the GitHub release when the version in .direct-version has none yet
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  DOTNET_NOLOGO: true
+  DOTNET_CLI_TELEMETRY_OPTOUT: true
+
+jobs:
+  build:
+    name: Build the dacpac
+    runs-on: windows-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Check that the version files agree
+        id: version
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $version = (Get-Content .direct-version -Raw).Trim()
+          if ($version -notmatch '^\d+\.\d+\.\d+$') { throw ".direct-version holds '$version', expected major.minor.patch." }
+          $problems = @()
+
+          $props = Get-Content Directory.Build.props -Raw
+          if ($props -notmatch "<Version>$([regex]::Escape($version))(-[0-9A-Za-z.]+)?</Version>") { $problems += "Directory.Build.props <Version> does not start with $version." }
+          if ($props -notmatch "<DacVersion>$([regex]::Escape($version))\.0</DacVersion>") { $problems += "Directory.Build.props <DacVersion> is not $version.0." }
+
+          $next = Get-Content Releases.Direct_Framework/next/version.json -Raw | ConvertFrom-Json
+          if ($next.directFrameworkVersion -ne $version) { $problems += "Releases.Direct_Framework/next/version.json has directFrameworkVersion $($next.directFrameworkVersion)." }
+
+          $metadata = Get-Content Direct_Framework/DeploymentScripts/3-PostDeployment/omd_metadata.FRAMEWORK_METADATA.sql -Raw
+          if ($metadata -notmatch "N'DIRECT_VERSION',\s*N'$([regex]::Escape($version))'") { $problems += "omd_metadata.FRAMEWORK_METADATA.sql does not seed DIRECT_VERSION $version." }
+
+          $notes = Get-Content Documentation/ReleaseNotes.md -Raw
+          if ($notes -notmatch "(?m)^## Release $([regex]::Escape($version))\s*$") { $problems += "Documentation/ReleaseNotes.md has no section '## Release $version'." }
+
+          if ($problems.Count -gt 0) {
+            $problems | ForEach-Object { Write-Host "::error::$_" }
+            throw "The version files do not agree on $version."
+          }
+          Write-Host "DIRECT version $version"
+          "version=$version" >> $env:GITHUB_OUTPUT
+
+      - name: Build Direct_Framework (Release)
+        shell: pwsh
+        run: dotnet build Direct_Framework/Direct_Framework.sqlproj --configuration Release
+
+      - name: Check the build output
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # The post-build script copies the output to the next release folder, which is what the tests deploy.
+          $db = 'Releases.Direct_Framework/next/db'
+          foreach ($file in 'Direct_Framework.dacpac', 'master.dacpac') {
+            if (-not (Test-Path (Join-Path $db $file))) { throw "$file is missing from $db." }
+          }
+          Get-ChildItem $db -Recurse -File | Select-Object FullName, Length | Format-Table -AutoSize
+
+      - name: Upload the build output
+        uses: actions/upload-artifact@v4
+        with:
+          name: direct-framework-db
+          path: Releases.Direct_Framework/next/db
+          if-no-files-found: error
+          retention-days: 30
+
+  test:
+    name: Integration tests
+    runs-on: ubuntu-latest
+    needs: build
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Replace the next release folder with the build output
+        uses: actions/download-artifact@v4
+        with:
+          name: direct-framework-db
+          path: Releases.Direct_Framework/next/db
+
+      - name: Run the integration tests
+        run: >
+          dotnet run --project Direct_Framework.Integration.Tests --configuration Release --
+          --report-trx --report-trx-filename TestResults.trx --results-directory TestResults
+
+      - name: Upload the test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: integration-test-results
+          path: Direct_Framework.Integration.Tests/TestResults
+          if-no-files-found: ignore
+
+  release:
+    name: Publish the release
+    runs-on: ubuntu-latest
+    needs: [ build, test ]
+    if: >
+      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+      (github.event_name == 'workflow_dispatch' && inputs.publish)
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ needs.build.outputs.version }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Skip when v${{ needs.build.outputs.version }} is already released
+        id: check
+        run: |
+          if gh release view "v$VERSION" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            echo "::notice::Release v$VERSION exists already; nothing to publish. Bump .direct-version and the other version files to release again."
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+          elif git rev-parse -q --verify "refs/tags/v$VERSION" > /dev/null; then
+            echo "::error::Tag v$VERSION exists without a release. Delete the tag or publish the release by hand."
+            exit 1
+          else
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Download the build output
+        if: steps.check.outputs.publish == 'true'
+        uses: actions/download-artifact@v4
+        with:
+          name: direct-framework-db
+          path: dist/db
+
+      - name: Assemble the release assets
+        if: steps.check.outputs.publish == 'true'
+        run: |
+          set -euo pipefail
+          mkdir -p dist/assets
+          cp dist/db/Direct_Framework.dacpac dist/db/master.dacpac dist/assets/
+          (cd fabric && zip -q -r ../dist/assets/Direct_Fabric.zip .)
+          cp snowflake/Direct_Snowflake.sql dist/assets/
+          ls -l dist/assets
+
+      - name: Write the release notes
+        if: steps.check.outputs.publish == 'true'
+        run: |
+          set -euo pipefail
+          # The section of Documentation/ReleaseNotes.md for this version, without its heading.
+          awk -v v="$VERSION" '
+            $0 ~ "^## Release " v "[[:space:]]*$" { on = 1; next }
+            on && /^## / { exit }
+            on { print }
+          ' Documentation/ReleaseNotes.md | sed -e :a -e '/^\n*$/{$d;N;ba' -e '}' > dist/notes.md
+          if [ ! -s dist/notes.md ]; then
+            echo "::error::Documentation/ReleaseNotes.md has no content under '## Release $VERSION'."
+            exit 1
+          fi
+          previous=$(git tag --list 'v*' --sort=-v:refname | head -n 1)
+          {
+            echo
+            echo "### Assets"
+            echo
+            echo "- \`Direct_Framework.dacpac\` and \`master.dacpac\`: the SQL Server edition, deployed with SqlPackage or DacFx."
+            echo "- \`Direct_Fabric.zip\`: the Microsoft Fabric edition (standard pipelines, Variable Library and scripts of the \`fabric\` folder)."
+            echo "- \`Direct_Snowflake.sql\`: the Snowflake edition, one deployment script."
+            if [ -n "$previous" ]; then
+              echo
+              echo "Full Changelog: https://github.com/$GITHUB_REPOSITORY/compare/$previous...v$VERSION"
+            fi
+          } >> dist/notes.md
+          cat dist/notes.md
+
+      - name: Publish v${{ needs.build.outputs.version }}
+        if: steps.check.outputs.publish == 'true'
+        run: |
+          set -euo pipefail
+          gh release create "v$VERSION" \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "DIRECT v$VERSION" \
+            --notes-file dist/notes.md \
+            dist/assets/Direct_Framework.dacpac \
+            dist/assets/master.dacpac \
+            dist/assets/Direct_Fabric.zip \
+            dist/assets/Direct_Snowflake.sql
+          echo "::notice::Published https://github.com/$GITHUB_REPOSITORY/releases/tag/v$VERSION"
