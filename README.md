@@ -43,3 +43,9 @@ winget install RedHat.Podman-Desktop
 ```
 
 The `RunTests.ps1` PowerShell script can be run to run the DIRECT unit and regression tests in the container.
+
+### Releases
+
+The `Build and release` GitHub Actions workflow (`.github/workflows/release.yml`) builds the dacpac and runs the integration tests for every pull request and every push to `main`. A push to `main` also publishes the GitHub release `v<version>` when the version in `.direct-version` has no release yet, with the release notes taken from the matching `## Release <version>` section of [ReleaseNotes.md](./Documentation/ReleaseNotes.md).
+
+To cut a release, bump the version in `.direct-version`, `Directory.Build.props`, `Releases.Direct_Framework/next/version.json` and the `DIRECT_VERSION` seed in `omd_metadata.FRAMEWORK_METADATA.sql`, add the release notes section, and merge. The workflow checks that these agree before it builds. Each release carries `Direct_Framework.dacpac` and `master.dacpac` (SQL Server), `Direct_Fabric.zip` (the `fabric` folder for Microsoft Fabric) and `Direct_Snowflake.sql` (the Snowflake edition).

@@ -33,7 +33,7 @@ public class MigrationTests : BaseTestContainer
 
     // 1. Deploy current version DACPAC
     // A dacpac has already been deployed by the init, so make sure this drops and redeploys a clean current
-    var currentDacpacPath = Path.Combine(projectDir, "Releases.Direct_Framework", "Current", "db", "Direct_Framework.dacpac");
+    var currentDacpacPath = Path.Combine(projectDir, "Releases.Direct_Framework", "current", "db", "Direct_Framework.dacpac");
     var dacServices = new DacServices(ContainerManager.MasterConnectionString);
     var currentDacpac = DacPackage.Load(currentDacpacPath);
 
@@ -113,7 +113,7 @@ END
     //}
 
     // 4. Deploy next version DACPAC (built from the database project)
-    var nextDacpacPath = Path.Combine(projectDir, "Releases.Direct_Framework", "Next", "db", "Direct_Framework.dacpac");
+    var nextDacpacPath = Path.Combine(projectDir, "Releases.Direct_Framework", "next", "db", "Direct_Framework.dacpac");
     var nextDacpac = DacPackage.Load(nextDacpacPath);
     try
     {
