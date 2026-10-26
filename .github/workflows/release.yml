@@ -152,11 +152,9 @@ jobs:
           path: Releases.Direct_Framework/next/db
 
       - name: Run the integration tests
-        # Debug, as RunTestsSimple.ps1 does: the Release configuration treats warnings as errors, and the
-        # NuGet audit of the test project's transitive packages (SSH.NET through Testcontainers,
-        # System.Security.Cryptography.Pkcs through DacFx) raises warnings that would fail the restore.
+        # Release treats warnings as errors, so the NuGet audit of the test project's packages gates the run too.
         run: >
-          dotnet run --project Direct_Framework.Integration.Tests --configuration Debug --
+          dotnet run --project Direct_Framework.Integration.Tests --configuration Release --
           --report-trx --report-trx-filename TestResults.trx --results-directory "${{ github.workspace }}/TestResults"
 
       - name: Upload the test results

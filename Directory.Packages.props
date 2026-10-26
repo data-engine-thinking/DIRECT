@@ -1,6 +1,8 @@
 <Project>
   <PropertyGroup>
     <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+    <!-- Pin transitive packages listed below as well, so vulnerable versions pulled in by dependencies can be lifted here -->
+    <CentralPackageTransitivePinningEnabled>true</CentralPackageTransitivePinningEnabled>
   </PropertyGroup>
   <ItemGroup>
     <!-- SQL Server master database reference -->
@@ -22,6 +24,9 @@
     <PackageVersion Include="Roslynator.CodeFixes" Version="4.14.1" />
     <PackageVersion Include="Roslynator.Formatting.Analyzers" Version="4.14.1" />
     <PackageVersion Include="Roslynator.Refactorings" Version="4.14.1" />
+    <!-- Transitive packages, pinned above the versions with known vulnerabilities (SSH.NET via Testcontainers.MsSql, Pkcs via Microsoft.SqlServer.DacFx) -->
+    <PackageVersion Include="SSH.NET" Version="2026.0.0" />
+    <PackageVersion Include="System.Security.Cryptography.Pkcs" Version="10.0.14" />
     <PackageVersion Include="Testcontainers.MsSql" Version="4.8.1" />
   </ItemGroup>
 </Project>
