@@ -332,7 +332,8 @@ public class OmdBatchModuleInstancesTests : BaseTestContainer
     var childParameters = CreateParameters(ChildBatchCode);
     childParameters.Add("@ParentBatchInstanceId", parentId);
     var childRows = (await conn.QueryAsync("[omd].[CreateBatchModuleInstances]", childParameters, commandType: System.Data.CommandType.StoredProcedure)).ToList();
-    Assert.IsEmpty(childRows, "The child Batch has no Modules.");
+    Assert.HasCount(1, childRows, "The child Batch has one Module.");
+    Assert.AreEqual(ChildModuleCode, (string)childRows[0].MODULE_CODE);
     Assert.AreEqual("Proceed", childParameters.Get<string?>("@InternalProcessingStatusCode"), childParameters.Get<string?>("@MessageLog"));
 
     var storedParent = await conn.ExecuteScalarAsync<long>(

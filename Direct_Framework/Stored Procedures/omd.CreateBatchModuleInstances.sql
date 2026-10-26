@@ -646,7 +646,7 @@ BEGIN
           EXEC [omd].[UpdateModuleInstance] @ModuleInstanceId = @OpenModuleInstanceId, @EventCode = N'Failure', @Debug = @Debug;
         END
 
-        UPDATE @Result SET INTERNAL_PROCESSING_STATUS_CODE = N'Failure' WHERE MODULE_INSTANCE_ID IN (SELECT MODULE_INSTANCE_ID FROM @OpenInstances);
+        UPDATE r SET r.INTERNAL_PROCESSING_STATUS_CODE = N'Failure' FROM @Result r JOIN @OpenInstances o ON r.MODULE_INSTANCE_ID = o.MODULE_INSTANCE_ID;
 
         -- Child Batch Instances first (deepest last in the list, so in reverse order), then the Batch Instance itself
         DECLARE @OpenBatches TABLE (ROW_ORDER INT IDENTITY(1,1) NOT NULL, BATCH_INSTANCE_ID BIGINT NOT NULL);
@@ -666,8 +666,8 @@ BEGIN
           EXEC [omd].[UpdateBatchInstance] @BatchInstanceId = @OpenBatchInstanceId, @EventCode = N'Failure', @Debug = @Debug;
         END
 
-        UPDATE @BatchInstances SET INTERNAL_PROCESSING_STATUS_CODE = N'Failure' WHERE BATCH_INSTANCE_ID IN (SELECT BATCH_INSTANCE_ID FROM @OpenBatches);
-        IF @BatchInstanceId IN (SELECT BATCH_INSTANCE_ID FROM @OpenBatches) SET @InternalProcessingStatusCode = N'Failure';
+        UPDATE b SET b.INTERNAL_PROCESSING_STATUS_CODE = N'Failure' FROM @BatchInstances b JOIN @OpenBatches o ON b.BATCH_INSTANCE_ID = o.BATCH_INSTANCE_ID;
+        IF EXISTS (SELECT 1 FROM @OpenBatches WHERE BATCH_INSTANCE_ID = @BatchInstanceId) SET @InternalProcessingStatusCode = N'Failure';
       END
 
       GOTO EndOfProcedure;

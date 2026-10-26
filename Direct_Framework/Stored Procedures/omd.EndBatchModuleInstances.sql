@@ -457,7 +457,7 @@ BEGIN
       SELECT BATCH_INSTANCE_ID
       FROM @BatchInstanceTree
       WHERE [LEVEL] > 0
-        AND EXECUTION_STATUS_CODE = N'Executing'
+        AND COALESCE(EXECUTION_STATUS_CODE, N'') = N'Executing'
       ORDER BY [LEVEL] DESC, BATCH_INSTANCE_ID;
 
       DECLARE @ChildCount INT = @@ROWCOUNT;
