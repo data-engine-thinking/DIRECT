@@ -471,6 +471,9 @@ BEGIN
   BEGIN CATCH
     -- Reset output parameters
     SET @SuccessIndicator = 'N';
+    SET @ReportedCount = COALESCE(@ReportedCount, 0);
+    SET @FailedCount = COALESCE(@FailedCount, 0);
+    SET @ExecutionStatusCode = @ExecutionStatusCode; -- keeps the status reached, if any; assignment required on every path
 
     SET @MessageLog = [omd].[AddLogMessage]('INFO', DEFAULT, N'Parameter @SuccessIndicator Exit Value', @SuccessIndicator, @MessageLog);
 

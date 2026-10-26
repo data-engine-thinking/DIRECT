@@ -444,7 +444,7 @@ BEGIN
           ELSE
           BEGIN
             -- The target data object lives in another engine; the orchestrator runs the statement there.
-            SET @RollbackStatement = @SqlStatement;
+            SET @RollbackStatement = CONVERT(NVARCHAR(MAX), @SqlStatement);
             SET @LogMessage = 'The rollback statement is returned to the caller (@ExecuteRollbackIndicator = N) and not executed here.'
             SET @MessageLog = [omd].[AddLogMessage](DEFAULT, DEFAULT, N'Status Update', @LogMessage, @MessageLog)
           END
@@ -501,6 +501,7 @@ BEGIN
     BEGIN CATCH
         -- Module Failure
       SET @SuccessIndicator = 'N'
+      SET @RollbackStatement = NULL;
       EXEC [omd].[UpdateModuleInstance]
         @ModuleInstanceId   = @ModuleInstanceId,
         @Debug              = @Debug,
@@ -568,6 +569,7 @@ BEGIN
     -- SP-wide error handler and logging
     SET @SuccessIndicator = 'N'
     set @InternalProcessingStatusCode = 'Abort';
+    SET @RollbackStatement = NULL;
     SET @LogMessage = @SuccessIndicator;
     SET @MessageLog = [omd].[AddLogMessage](DEFAULT, DEFAULT, N'Parameter @SuccessIndicator', @LogMessage, @MessageLog)
 

@@ -325,6 +325,7 @@ BEGIN
     DECLARE @PreviousEndValue NVARCHAR(100);
     DECLARE @ConsistencyDateTime DATETIME2(7);
     DECLARE @ConsistencyDateTimeString NVARCHAR(27);
+    DECLARE @SourceModuleInstanceColumn NVARCHAR(128) = LEFT(@ModuleInstanceIdColumnName, 128);
 
     WHILE @RowOrder <= @ModuleCount
     BEGIN
@@ -403,7 +404,7 @@ BEGIN
         EXEC [omd].[GetConsistencyTimestamp]
            @TableList                  = @DataObjectSource
           ,@SourceTimestampColumn      = @SourceTimestampColumn
-          ,@SourceModuleInstanceColumn = @ModuleInstanceIdColumnName
+          ,@SourceModuleInstanceColumn = @SourceModuleInstanceColumn
           ,@SourceDataLookupIndicator  = 'N'
           ,@Debug                      = @Debug
           ,@ConsistencyDateTime        = @ConsistencyDateTime OUTPUT
@@ -491,6 +492,8 @@ BEGIN
   BEGIN CATCH
     -- Reset output parameters
     SET @SuccessIndicator = 'N';
+    SET @InternalProcessingStatusCode = COALESCE(@InternalProcessingStatusCode, N'Abort');
+    SET @BatchInstanceId = @BatchInstanceId; -- keeps the created instance, if any; assignment required on every path
 
     SET @MessageLog = [omd].[AddLogMessage]('INFO', DEFAULT, N'Parameter @SuccessIndicator Exit Value', @SuccessIndicator, @MessageLog);
 
