@@ -1,5 +1,15 @@
 # Release Notes
 
+## Release 2.2.1
+
+This release adds the `LDA` landing area code to the reference data and makes failed Module runs without a Module Instance visible in the event log. The repository database schema is unchanged, so no migration is needed.
+
+Changes:
+
+* The area reference data (`omd_metadata.AREA`, and the Snowflake edition's reference data) now seeds `LDA` in the Staging layer next to `LND`, for solutions that name their landing area `LDA`. Without it, registering such a solution's Modules failed with a foreign key violation on `FK_OMD_MODULE_OMD_METADATA_AREA`.
+* Fixed: `omd.RunModule` wrote to `omd.EVENT_LOG` only from its error handler, which a soft failure never reaches. A failed run without a Module Instance - such as a Module code that does not exist while `AUTO_REGISTER_MODULES` is off - therefore left no trace in the log tables. The failure path now records the specific reason in the event log first, and the message names the Module code. Covered by a new integration regression test.
+* The framework version is 2.2.1 (`DIRECT_VERSION` in `omd_metadata.FRAMEWORK_METADATA`).
+
 ## Release 2.2.0
 
 This release adds support for external orchestration: an orchestrator outside the repository database (for example a Microsoft Fabric Data Factory pipeline) opens and closes the instances of a whole Batch with two calls, and runs the code on the target engine itself. The repository database schema is unchanged, so no migration is needed.

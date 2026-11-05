@@ -192,7 +192,7 @@ BEGIN
       -- If not, raise a soft error.
       SET @SuccessIndicator = 'N';
       SET @ModuleInstanceStartTimestamp = NULL;
-      SET @LogMessage = N'Failed to register module instance.'
+      SET @LogMessage = CONCAT(N'Failed to register a module instance for Module Code ''', @ModuleCode, N'''.');
       IF @ProcessMessageLog = 'Y' SET @MessageLog =
         [omd].[AddLogMessage]('ERROR', DEFAULT, 'Dependency', @LogMessage, @MessageLog);
       IF @ThrowOnFailure = 'Y' THROW 50000, @LogMessage, 1;
@@ -255,6 +255,17 @@ BEGIN
 /* ----- Start of end state management -------------------------------------- */
 
     EndOfProcedureFailure:
+      /* Record the failure in the event log while @LogMessage still holds the specific reason.
+         Without this, a failure that produced no module instance - such as a module code that
+         does not exist - left no trace in the log tables at all: the only event log write sat
+         in the CATCH block, which a soft failure never reaches. */
+      SET @EventDetail = COALESCE(NULLIF(TRIM(@LogMessage), N''), N'Run Module process encountered errors.');
+      EXEC [omd].[InsertIntoEventLog]
+         @ModuleInstanceId  = @ModuleInstanceId
+        ,@BatchInstanceId   = @BatchInstanceId
+        ,@EventTypeCode     = @EventTypeCode
+        ,@EventDetail       = @EventDetail;
+
       -- close run as failed if there is a module instance id available
       IF @ModuleInstanceId IS NOT NULL
       BEGIN
