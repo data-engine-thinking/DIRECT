@@ -152,6 +152,16 @@ foreach ($pipelineName in $pipelineNames) {
   $definitionFile = Join-Path -Path $itemsFolder -ChildPath "$pipelineName.DataPipeline/pipeline-content.json"
   if (-not (Test-Path -Path $definitionFile)) { throw "Pipeline definition not found: $definitionFile (run Build-PipelineDefinitions.ps1)" }
   $content = Get-Content -Path $definitionFile -Raw
+  # The pipeline editor cannot open a definition whose connection reference is an expression: it expects a
+  # literal connection id and fails with 'TypeError: ... toLowerCase is not a function'. The runtime accepts
+  # either, so the shipped definition stays parameterized and the literal ids of this workspace are
+  # substituted here; everything else keeps resolving through the Variable Library.
+  if (-not [string]::IsNullOrWhiteSpace($RepositoryConnectionId)) {
+    $content = [regex]::Replace($content, '"connection":\s*\{\s*"value":\s*"@pipeline\(\)\.libraryVariables\.RepositoryConnectionId",\s*"type":\s*"Expression"\s*\}', ('"connection": "{0}"' -f $RepositoryConnectionId))
+  }
+  if (-not [string]::IsNullOrWhiteSpace($WarehouseConnectionId)) {
+    $content = [regex]::Replace($content, '"connection":\s*\{\s*"value":\s*"@pipeline\(\)\.libraryVariables\.WarehouseConnectionId",\s*"type":\s*"Expression"\s*\}', ('"connection": "{0}"' -f $WarehouseConnectionId))
+  }
   # Fabric limits an item description to 256 characters
   $description = [string] ($content | ConvertFrom-Json).properties.description
   if ($description.Length -gt 256) { $description = $description.Substring(0, 256) }

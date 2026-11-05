@@ -1,5 +1,15 @@
 # Release Notes
 
+## Release 2.2.3
+
+This release makes the standard Fabric pipelines openable in the Fabric portal editor. The repository database schema is unchanged, so no migration is needed.
+
+Changes:
+
+* `Deploy-DirectFabric.ps1` substitutes the literal connection ids of the workspace into the pipelines' connection references at deployment. The shipped pipeline definitions keep the Variable Library expressions (the runtime accepts either), but the portal editor requires a literal connection id and failed to open the deployed pipelines (''TypeError: toLowerCase is not a function''). Everything else keeps resolving through the Variable Library. Workspaces that take `fabric/items` as a Git folder still carry the expression form and are affected by the editor limitation.
+* Fixed: `omd_reporting.vw_MODULE_FAILURES` compared the execution status against the legacy code ''F'' while the framework records ''Failed'', so the view never showed any failure. It now reports failed Module runs of the last three months.
+* The framework version is 2.2.3 (`DIRECT_VERSION` in `omd_metadata.FRAMEWORK_METADATA`).
+
 ## Release 2.2.2
 
 This release removes the legacy `LND` landing area code from the reference data. `LDA` is the landing area code since release 2.2.1, matching the current samples. The seed merge never deletes rows, so databases that already carry `LND` keep it; only fresh deployments start without it. The repository database schema is unchanged, so no migration is needed.
