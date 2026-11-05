@@ -35,7 +35,6 @@ BEGIN TRY
       (N'INT',      N'Integration',   N'The Base Integration Area'),
       (N'INTPR',    N'Integration',   N'The Derived Integration Area'),
       (N'LDA',      N'Staging',       N'The Landing Area of the Staging Layer'),
-      (N'LND',      N'Staging',       N'The Landing Area of the Staging Layer'),
       (N'MAINT',    N'Maintenance',   N'Internal Data Solution'),
       (N'PRES',     N'Presentation',  N'The Access Area'),
       (N'PSA',      N'Staging',       N'The Persistent Staging Area'),
