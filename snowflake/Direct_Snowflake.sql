@@ -268,6 +268,7 @@ USING (SELECT * FROM VALUES
     ('HELPER', 'Presentation', 'The Helper Area'),
     ('INT',    'Integration',  'The Base Integration Area'),
     ('INTPR',  'Integration',  'The Derived Integration Area'),
+    ('LDA',    'Staging',      'The Landing Area of the Staging Layer'),
     ('LND',    'Staging',      'The Landing Area of the Staging Layer'),
     ('MAINT',  'Maintenance',  'Internal Data Solution'),
     ('PRES',   'Presentation', 'The Access Area'),
