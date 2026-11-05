@@ -2,11 +2,11 @@
 
 ## Release 2.2.2
 
-This release marks the `LND` landing area code as legacy in the reference data. `LDA` is the landing area code since release 2.2.1, matching the current samples; `LND` stays seeded for solutions that still use it, with a description that points at `LDA`. The seed merge updates matched rows, so existing databases pick the new description up on their next deployment. The repository database schema is unchanged, so no migration is needed.
+This release removes the legacy `LND` landing area code from the reference data. `LDA` is the landing area code since release 2.2.1, matching the current samples. The seed merge never deletes rows, so databases that already carry `LND` keep it; only fresh deployments start without it. The repository database schema is unchanged, so no migration is needed.
 
 Changes:
 
-* The `LND` row of the area reference data (`omd_metadata.AREA`, and the Snowflake edition's reference data) is described as the legacy code for the Landing Area, superseded by `LDA`. Solutions that still use `LND` keep working unchanged.
+* The area reference data (`omd_metadata.AREA`, and the Snowflake edition's reference data) no longer seeds `LND`. A solution that still names its landing area `LND` keeps working against an existing database, and registers against a fresh one after adding the row back manually.
 * The framework version is 2.2.2 (`DIRECT_VERSION` in `omd_metadata.FRAMEWORK_METADATA`).
 
 ## Release 2.2.1

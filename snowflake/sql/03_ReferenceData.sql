@@ -23,7 +23,6 @@ USING (SELECT * FROM VALUES
     ('INT',    'Integration',  'The Base Integration Area'),
     ('INTPR',  'Integration',  'The Derived Integration Area'),
     ('LDA',    'Staging',      'The Landing Area of the Staging Layer'),
-    ('LND',    'Staging',      'Legacy code for the Landing Area of the Staging Layer, superseded by LDA'),
     ('MAINT',  'Maintenance',  'Internal Data Solution'),
     ('PRES',   'Presentation', 'The Access Area'),
     ('PSA',    'Staging',      'The Persistent Staging Area'),
