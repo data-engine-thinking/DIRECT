@@ -180,6 +180,7 @@ BEGIN
         DECLARE @RegisterSuccessIndicator CHAR(1);
         EXEC [omd].[RegisterModule]
           @ModuleCode = @ModuleCode,
+          @ModuleAreaCode = N'MAINT', -- required by omd.MODULE; nothing better is known about an unregistered Module
           @Debug = @Debug,
           @ModuleId = @ModuleId OUTPUT,
           @SuccessIndicator = @RegisterSuccessIndicator OUTPUT,

@@ -297,6 +297,12 @@ BEGIN
 
     EndOfProcedureFailure:
 
+      /* The failure jumps inside the main transaction (an unknown Batch code, a failed
+         auto-registration) arrive here past both the COMMIT and the CATCH's rollback, which
+         left the transaction open and failed the procedure's return with a mismatched
+         transaction count (error 266). Roll back any transaction still open. */
+      IF @@TRANCOUNT > 0 AND XACT_STATE() <> 0 ROLLBACK TRANSACTION;
+
       SET @SuccessIndicator = 'N';
       SET @LogMessage = CONCAT(@ProcessDescription, N' encountered errors.');
       IF @ProcessMessageLog = 'Y' SET @MessageLog =

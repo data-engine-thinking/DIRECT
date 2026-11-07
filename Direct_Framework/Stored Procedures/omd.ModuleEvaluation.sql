@@ -156,7 +156,7 @@ BEGIN
     SET @LogMessage = 'The number of active Module Instances is ' + COALESCE(CONVERT(NVARCHAR(10), @ActiveModuleInstanceCount), '0') + '.';
     SET @MessageLog = [omd].[AddLogMessage](DEFAULT, DEFAULT, N'Status Update', @LogMessage, @MessageLog);
 
-    SET @LogMessage = 'The minimum active Module Instance Id is ' + COALESCE(CONVERT(NVARCHAR(10), @MinimumActiveModuleInstance), '0') + '.';
+    SET @LogMessage = 'The minimum active Module Instance Id is ' + COALESCE(CONVERT(NVARCHAR(20), @MinimumActiveModuleInstance), '0') + '.';
     SET @MessageLog = [omd].[AddLogMessage](DEFAULT, DEFAULT, N'Status Update', @LogMessage, @MessageLog);
 
     IF (
@@ -407,12 +407,22 @@ BEGIN
       DECLARE @TableCodeSafe NVARCHAR(1000);
       SELECT @TableCode = DATA_OBJECT_TARGET FROM [omd].[MODULE] WHERE MODULE_ID=@ModuleId;
 
-      -- Safety net to ensure brackets are in place for table names with brackets.
+      -- Safety net to ensure brackets are in place for table names without brackets. Every part of the
+      -- name is quoted on its own, so that a schema-qualified name stays schema-qualified. N/A means the
+      -- Module has no target and is kept as it is for the check below.
       SELECT @TableCodeSafe = CASE
+         WHEN @TableCode = 'N/A'
+           THEN @TableCode          -- No target, nothing to quote
          WHEN CHARINDEX('[', @TableCode) > 0
            OR CHARINDEX(']', @TableCode) > 0
            THEN @TableCode          -- Already has brackets, leave as-is
-         ELSE QUOTENAME(@TableCode) -- No brackets, add them
+         ELSE COALESCE(             -- No brackets, add them (PARSENAME handles up to four parts)
+           NULLIF(CONCAT_WS('.',
+             QUOTENAME(PARSENAME(@TableCode, 4)),
+             QUOTENAME(PARSENAME(@TableCode, 3)),
+             QUOTENAME(PARSENAME(@TableCode, 2)),
+             QUOTENAME(PARSENAME(@TableCode, 1))), ''),
+           @TableCode)
        END;
 
       SET @LogMessage = 'The Table Code (DATA_OBJECT_TARGET) for Module ' + CONVERT(VARCHAR(10), @ModuleId) + ' is ' + @TableCodeSafe + '.'
@@ -455,24 +465,25 @@ BEGIN
             SET @LogMessage = 'The rollback statement is returned to the caller (@ExecuteRollbackIndicator = N) and not executed here.'
             SET @MessageLog = [omd].[AddLogMessage](DEFAULT, DEFAULT, N'Status Update', @LogMessage, @MessageLog)
           END
-
-          SET @SqlStatement = 'DELETE FROM omd.SOURCE_CONTROL WHERE MODULE_INSTANCE_ID IN (' +
-            CASE
-              WHEN LEFT(LTRIM(RTRIM(@ModuleInstanceIdList)), 1) = '(' AND RIGHT(LTRIM(RTRIM(@ModuleInstanceIdList)), 1) = ')'
-                THEN SUBSTRING(@ModuleInstanceIdList, 2, LEN(@ModuleInstanceIdList) - 2)
-              ELSE @ModuleInstanceIdList
-            END + ')';
-
-          SET @LogMessage = 'Source Control Rollback SQL statement is: ' + @SqlStatement
-          SET @MessageLog = [omd].[AddLogMessage](DEFAULT, DEFAULT, N'Status Update', @LogMessage, @MessageLog)
-
-          EXEC (@SqlStatement);
         END
         ELSE
         BEGIN
           SET @LogMessage = 'No rollback is required for '+@TableCodeSafe
           SET @MessageLog = [omd].[AddLogMessage](DEFAULT, DEFAULT, N'Status Update', @LogMessage, @MessageLog)
         END
+
+        -- The load windows of the rolled back instances are removed whether or not the Module has a target.
+        SET @SqlStatement = 'DELETE FROM omd.SOURCE_CONTROL WHERE MODULE_INSTANCE_ID IN (' +
+          CASE
+            WHEN LEFT(LTRIM(RTRIM(@ModuleInstanceIdList)), 1) = '(' AND RIGHT(LTRIM(RTRIM(@ModuleInstanceIdList)), 1) = ')'
+              THEN SUBSTRING(@ModuleInstanceIdList, 2, LEN(@ModuleInstanceIdList) - 2)
+            ELSE @ModuleInstanceIdList
+          END + ')';
+
+        SET @LogMessage = 'Source Control Rollback SQL statement is: ' + @SqlStatement
+        SET @MessageLog = [omd].[AddLogMessage](DEFAULT, DEFAULT, N'Status Update', @LogMessage, @MessageLog)
+
+        EXEC (@SqlStatement);
 
         END TRY
         BEGIN CATCH
