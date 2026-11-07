@@ -49,12 +49,15 @@ public class SqlServerContainerManager
   }
 
   /// <summary>
-  /// Initializes the SQL Server container and deploys the database schema
-  /// This method is thread-safe and can be called multiple times
+  /// Initializes the SQL Server container and deploys the database schema.
+  /// <paramref name="version"/> can be:
+  ///   "next"     - the locally-built dacpac under Releases.Direct_Framework/next/
+  ///   "current"  - the most-recent published GitHub release (downloaded + cached on first use)
+  ///   "vX.Y"     - a specific published release tag
   /// </summary>
   public async Task InitializeAsync(string? version = "next")
   {
-    version = string.IsNullOrWhiteSpace(version) | version != "current" ? "next" : "current";
+    version = string.IsNullOrWhiteSpace(version) ? "next" : version;
 
     // Create the container for Linux SQL Server
     _container = new MsSqlBuilder()
@@ -290,12 +293,33 @@ DBCC CHECKIDENT('omd.SOURCE_CONTROL', RESEED, 1);
     Console.WriteLine($"Inserted module instance with id: {moduleInstanceId}");
   }
 
+  /// <summary>
+  /// Resolved release info for the most recent <c>InitializeAsync(version)</c> call where the
+  /// version was a published release tag (or "current"). Null when the active deploy is "next"
+  /// or a local override. Used by MigrationTests to locate the previous release's
+  /// PostDacpacDeployment.sql.
+  /// </summary>
+  public ResolvedRelease? ResolvedBaseline { get; private set; }
+
+  /// <summary>
+  /// Standard deploy options used for both initial deploy and migration deploy. Centralized so
+  /// the migration test runs against the same options the container manager uses.
+  /// </summary>
+  public static DacDeployOptions DefaultDeployOptions() => new()
+  {
+    BlockOnPossibleDataLoss = false,
+    CreateNewDatabase = true,
+    DropObjectsNotInSource = true,
+    VerifyDeployment = true,
+    CommandTimeout = 120,
+  };
+
   private async Task DeployDacpacAsync(string version, bool dropExistingDb = true)
   {
     if (_container is null)
       throw new InvalidOperationException("Container not initialized.");
 
-    var dacpacPath = FindDacpacPath(version);
+    var dacpacPath = await FindDacpacPathAsync(version).ConfigureAwait(false);
 
     if (!File.Exists(dacpacPath))
     {
@@ -326,18 +350,8 @@ DBCC CHECKIDENT('omd.SOURCE_CONTROL', RESEED, 1);
 
       var dacServices = new DacServices(_masterConnectionString);
 
-      // Configure deployment options
-      var deployOptions = new DacDeployOptions
-      {
-        BlockOnPossibleDataLoss = false,
-        CreateNewDatabase = true,
-        DropObjectsNotInSource = true,
-        VerifyDeployment = true,
-        CommandTimeout = 120 // 2 minutes timeout
-      };
-
       Console.WriteLine("Starting DACPAC deployment...");
-      await Task.Run(() => dacServices.Deploy(dacpac, "Direct_Framework", upgradeExisting: true, deployOptions));
+      await Task.Run(() => dacServices.Deploy(dacpac, "Direct_Framework", upgradeExisting: true, DefaultDeployOptions()));
       Console.WriteLine("DACPAC deployment completed successfully");
 
       // Verify deployment by checking what was actually created
@@ -354,24 +368,53 @@ DBCC CHECKIDENT('omd.SOURCE_CONTROL', RESEED, 1);
     }
   }
 
-  private static string FindDacpacPath(string version)
+  /// <summary>
+  /// Resolve the path of the Direct_Framework.dacpac for the requested version.
+  ///   "next"     -> local build output under Releases.Direct_Framework/next/db/
+  ///   "current"  -> Releases.Direct_Framework/current/ override if present, else latest GitHub release
+  ///   "vX.Y..."  -> the matching GitHub release tag
+  /// </summary>
+  public async Task<string> FindDacpacPathAsync(string version)
   {
-    version = version == "current" ? "current" : "next";
-    // Get the cwd/output directory (e.g., bin\Debug\net10.0)
     var outputDir = AppContext.BaseDirectory;
-
-    // Traverse up to the project folder
     var projectDir = Directory.GetParent(outputDir)!.Parent!.Parent!.Parent!.Parent!.FullName;
 
-    // 1. Deploy previous version DACPAC
-    var dacpacPath = Path.Combine(projectDir, "Releases.Direct_Framework", version, "db", "Direct_Framework.dacpac");
-
-    if (File.Exists(dacpacPath))
+    if (string.Equals(version, "next", StringComparison.OrdinalIgnoreCase))
     {
-      return dacpacPath;
+      var localNext = Path.Combine(projectDir, "Releases.Direct_Framework", "next", "db", "Direct_Framework.dacpac");
+      if (!File.Exists(localNext))
+        throw new FileNotFoundException(
+          $"Could not locate 'next' Direct_Framework.dacpac at {localNext}. " +
+          "Build the Direct_Framework project before running tests.");
+      Console.WriteLine($">>> Resolved baseline: tag=next dacpac={localNext}");
+      ResolvedBaseline = null;
+      return localNext;
     }
 
-    throw new FileNotFoundException($"Could not locate '{version}' Direct_Framework.dacpac. Please validate the reference location and build the main project.");
+    if (string.Equals(version, "current", StringComparison.OrdinalIgnoreCase))
+    {
+      // Local override path takes precedence (offline / power-user scenario)
+      var localOverride = Path.Combine(projectDir, "Releases.Direct_Framework", "current", "db", "Direct_Framework.dacpac");
+      if (File.Exists(localOverride))
+      {
+        Console.WriteLine($">>> Resolved baseline: tag=current(local-override) dacpac={localOverride}");
+        ResolvedBaseline = new ResolvedRelease(
+          Tag: "local-override",
+          RootDir: Path.Combine(projectDir, "Releases.Direct_Framework", "current", "db"),
+          HasDeploymentScripts: Directory.Exists(Path.Combine(projectDir, "Releases.Direct_Framework", "current", "db", "DeploymentScripts")));
+        return localOverride;
+      }
+      // Otherwise fall through to "latest published release"
+      version = "latest";
+    }
+
+    var resolved = await ReleaseAssetResolver.EnsureReleaseAsync(version).ConfigureAwait(false);
+    var dacpac = Path.Combine(resolved.RootDir, "Direct_Framework.dacpac");
+    if (!File.Exists(dacpac))
+      throw new FileNotFoundException($"Resolved release {resolved.Tag} did not contain Direct_Framework.dacpac at {dacpac}");
+    Console.WriteLine($">>> Resolved baseline: tag={resolved.Tag} dacpac={dacpac} hasScripts={resolved.HasDeploymentScripts}");
+    ResolvedBaseline = resolved;
+    return dacpac;
   }
 
   /// <summary>
@@ -490,22 +533,24 @@ DBCC CHECKIDENT('omd.SOURCE_CONTROL', RESEED, 1);
   }
 
   /// <summary>
-  /// Start external sqlcmd process to run a stand-alone SQL script file
-  /// This mimics the ci dacpac deployment pre/post-processing of the database
+  /// Start an external sqlcmd process to run a stand-alone SQL script file. Mimics the way a
+  /// CD pipeline runs pre/post-dacpac scripts (sqlcmd is required for <c>:r ./Migrations/...</c>
+  /// includes used by PreDacpacDeployment.sql).
+  ///
+  /// Streams stdout/stderr live so long-running migrations are visible. On non-zero exit,
+  /// the thrown exception includes the script path and the last ~50 lines of merged output.
   /// </summary>
-  /// <param name="scriptPath"></param>
-  /// <param name="ConnectionString"></param>
-  /// <exception cref="Exception"></exception>
   public void RunSqlCmdScript(string scriptPath, string ConnectionString)
   {
     var builder = new SqlConnectionStringBuilder(ConnectionString);
 
-    var process = new Process
+    using var process = new Process
     {
       StartInfo = new ProcessStartInfo
       {
         FileName = "sqlcmd",
-        Arguments = $"-S {builder.DataSource} -d {builder.InitialCatalog} -U {builder.UserID} -P {builder.Password} -i \"{scriptPath}\" -b -I",
+        // -b: exit on error, -I: enable QUOTED_IDENTIFIER, -r 1: errors+messages to stderr
+        Arguments = $"-S {builder.DataSource} -d {builder.InitialCatalog} -U {builder.UserID} -P {builder.Password} -i \"{scriptPath}\" -b -I -r 1",
         RedirectStandardOutput = true,
         RedirectStandardError = true,
         UseShellExecute = false,
@@ -514,14 +559,34 @@ DBCC CHECKIDENT('omd.SOURCE_CONTROL', RESEED, 1);
       }
     };
 
+    var tail = new System.Collections.Generic.Queue<string>(64);
+    void Capture(string prefix, string? line)
+    {
+      if (line is null) return;
+      var rendered = $"  [sqlcmd:{prefix}] {line}";
+      Console.WriteLine(rendered);
+      lock (tail)
+      {
+        tail.Enqueue(rendered);
+        while (tail.Count > 50) tail.Dequeue();
+      }
+    }
+
+    process.OutputDataReceived += (_, e) => Capture("out", e.Data);
+    process.ErrorDataReceived += (_, e) => Capture("err", e.Data);
+
+    Console.WriteLine($"[sqlcmd] running {scriptPath}");
     process.Start();
-    string output = process.StandardOutput.ReadToEnd();
-    string error = process.StandardError.ReadToEnd();
+    process.BeginOutputReadLine();
+    process.BeginErrorReadLine();
     process.WaitForExit();
 
     if (process.ExitCode != 0)
     {
-      throw new Exception($"sqlcmd failed: {error}\n{output}");
+      string snippet;
+      lock (tail) snippet = string.Join(Environment.NewLine, tail);
+      throw new InvalidOperationException(
+        $"sqlcmd failed (exit {process.ExitCode}) running {scriptPath}{Environment.NewLine}--- last output ---{Environment.NewLine}{snippet}");
     }
   }
 
