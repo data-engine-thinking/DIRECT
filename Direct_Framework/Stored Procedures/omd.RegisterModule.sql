@@ -263,9 +263,10 @@ BEGIN
         SET @MessageLog = [omd].[AddLogMessage](DEFAULT, DEFAULT, N'Status Update', @LogMessage, @MessageLog)
 
       END
-
-      SET @SuccessIndicator = 'Y'
     END
+
+    -- A new Module and an existing one both end here
+    SET @SuccessIndicator = 'Y'
 
     -- End of procedure label
     EndOfProcedure:

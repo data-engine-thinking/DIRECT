@@ -434,7 +434,7 @@ BEGIN
     */
     EndOfProcedure:
 
-    SET @LogMessage = 'Batch Instance Id ' + CONVERT(NVARCHAR(10) , @BatchInstanceId) + ' was processed';
+    SET @LogMessage = 'Batch Instance Id ' + CONVERT(NVARCHAR(20), @BatchInstanceId) + ' was processed';
     SET @MessageLog = [omd].[AddLogMessage](DEFAULT, DEFAULT, N'Result', @LogMessage, @MessageLog)
     SET @LogMessage = 'The result (processing status code) is ' + @InternalProcessingStatusCode;
     SET @MessageLog = [omd].[AddLogMessage](DEFAULT, DEFAULT, N'Result', @LogMessage, @MessageLog)

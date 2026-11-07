@@ -174,7 +174,7 @@ BEGIN
     IF @EventCode = 'Success'
       BEGIN TRY
 
-        SET @LogMessage = 'Setting Module Instance ' + CONVERT(NVARCHAR(20), @ModuleInstanceId) +' to ' + @EventCode + ' and row count ' + CONVERT(NVARCHAR(10), @RowCountInsert) + '.'
+        SET @LogMessage = 'Setting Module Instance ' + CONVERT(NVARCHAR(20), @ModuleInstanceId) +' to ' + @EventCode + ' and row count ' + CONVERT(NVARCHAR(20), @RowCountInsert) + '.'
         SET @MessageLog = [omd].[AddLogMessage](DEFAULT, DEFAULT, N'Status Update', @LogMessage, @MessageLog)
 
         UPDATE [omd].[MODULE_INSTANCE]

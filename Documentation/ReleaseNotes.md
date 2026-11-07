@@ -1,5 +1,19 @@
 # Release Notes
 
+## Release 2.2.4
+
+This release fixes failures in Module registration, rollback and row count reporting that surfaced when running DIRECT from an external orchestrator. The repository database schema is unchanged, so no migration is needed.
+
+Changes:
+
+* Fixed: `omd.UpdateModuleInstance` failed with an arithmetic overflow for a `Success` event with 10 billion or more inserted rows, because the log message converted the row count to `NVARCHAR(10)`. Through `omd.EndBatchModuleInstances` this left the Batch Instance `Executing`, which aborted the next run. `omd.BatchEvaluation` and `omd.ModuleEvaluation` had the same conversion on instance ids, which failed the evaluation of every instance once the ids reached 11 digits.
+* Fixed: `omd.RegisterModule` reported `@SuccessIndicator = 'N'` for every new Module, although it had registered it; only an existing Module reported `Y`.
+* Fixed: automatic registration of Modules never worked. `omd.CreateModuleInstance` called `omd.RegisterModule` without the area code that `omd.MODULE` requires, and treated the indicator above as a failure, so an unknown Module code failed even with `AUTO_REGISTER_MODULES` set to `Y`. Auto-registered Modules are now placed in the `MAINT` area, as in the Snowflake edition. As a result an unknown Module code no longer fails under the default settings: `omd.RunModule` registers the Module and completes without running anything. Set `AUTO_REGISTER_MODULES` to `N` to keep unknown codes as failures.
+* Fixed: `omd.ModuleEvaluation` quoted a `DATA_OBJECT_TARGET` without brackets as one name, so `dbo.Customer` became `[dbo.Customer]`. Each part of the name is now quoted on its own. A table name that really contains a dot must be registered with its brackets.
+* Fixed: the rollback of a Module without a target (`DATA_OBJECT_TARGET` is `N/A`, the default) tried to delete from a table named `[N/A]`. With `@ExecuteRollbackIndicator = 'Y'`, which `omd.RunModule` uses, every run after a failure then failed. Such a Module now has no rollback statement, and its load windows are still removed.
+* Fixed: the failure jumps inside the transaction of `omd.CreateBatchInstance` (an unknown Batch code, a failed auto-registration) left the transaction open, which failed the procedure with error 266 and replaced the reason for the failure. This is the fix `omd.CreateModuleInstance` received in release 2.2.1.
+* The framework version is 2.2.4 (`DIRECT_VERSION` in `omd_metadata.FRAMEWORK_METADATA`).
+
 ## Release 2.2.3
 
 This release makes the standard Fabric pipelines openable in the Fabric portal editor. The repository database schema is unchanged, so no migration is needed.
