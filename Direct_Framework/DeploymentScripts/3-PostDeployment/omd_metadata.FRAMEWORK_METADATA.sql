@@ -27,7 +27,7 @@ DECLARE @tblMerge TABLE(
 
 INSERT INTO @tblMerge([CODE], [VALUE], [GROUP], [DESCRIPTION], [ACTIVE_INDICATOR])
 VALUES
-   (N'DIRECT_VERSION', N'2.2.3', N'SYSTEM_METADATA',
+   (N'DIRECT_VERSION', N'2.2.4', N'SYSTEM_METADATA',
       N'The current version of the DIRECT Framework and database', 'Y')
 
   ,(N'LOG_TO_EVENT_LOG', N'Y', N'SETTINGS',
