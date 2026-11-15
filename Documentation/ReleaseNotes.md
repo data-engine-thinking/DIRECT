@@ -1,5 +1,14 @@
 # Release Notes
 
+## Release 2.2.4
+
+This release makes the standard Fabric pipelines close a Batch or Module cleanly when no Module proceeds. The repository database schema is unchanged, so no migration is needed.
+
+Changes:
+
+* Fixed: a Fabric Script activity drops a result set that holds no rows, so when no Module proceeds - an aborted or cancelled evaluation, or a Batch opened while no Modules are registered yet - the `Close Batch` and `Close Module` activities crashed on an empty `resultSets` array and left the Batch Instance open as `Executing`, which in turn aborted every following run of the same Batch. The `ModuleResults` expression now reports an empty result list, which the close scripts already handle: the Batch closes from the instance statuses, and a Module without a reported result closes as a Failure with a clear event detail.
+* The framework version is 2.2.4 (`DIRECT_VERSION` in `omd_metadata.FRAMEWORK_METADATA`).
+
 ## Release 2.2.3
 
 This release makes the standard Fabric pipelines openable in the Fabric portal editor. The repository database schema is unchanged, so no migration is needed.
