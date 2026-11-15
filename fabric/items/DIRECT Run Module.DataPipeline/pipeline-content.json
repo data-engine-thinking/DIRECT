@@ -334,7 +334,7 @@
                   "size": "-1",
                   "direction": "Input",
                   "value": {
-                    "value": "@string(activity('Run Modules').output.resultSets[0].rows)",
+                    "value": "@string(if(equals(coalesce(activity('Run Modules').output.resultSetCount, 0), 0), json('[]'), activity('Run Modules').output.resultSets[0].rows))",
                     "type": "Expression"
                   }
                 }
